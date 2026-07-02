@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -15,7 +13,7 @@ import 'updater.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
 // PANTRY — inventory & cost tracker. Scans groceries, tracks remaining
-// weight + cost, and syncs pantry.json to GitHub for the AI chef to read.
+// amount + cost, and syncs pantry.json to GitHub for the AI chef to read.
 // ═══════════════════════════════════════════════════════════════════════
 
 const Color kBg = Color(0xFF0E0F12);
@@ -23,6 +21,7 @@ const Color kCard = Color(0xFF1A1A1A);
 const Color kBorder = Color(0xFF232323);
 const Color kAccent = Color(0xFF6FCF97); // fresh green
 const Color kWarn = Color(0xFFE0A458); // amber for expiring
+const Color kDanger = Color(0xFFCC6B6B);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,10 +41,7 @@ class PantryApp extends StatelessWidget {
         useMaterial3: true,
         brightness: Brightness.dark,
         scaffoldBackgroundColor: kBg,
-        colorScheme: const ColorScheme.dark(
-          primary: kAccent,
-          surface: kCard,
-        ),
+        colorScheme: const ColorScheme.dark(primary: kAccent, surface: kCard),
         fontFamily: 'Roboto',
       ),
       home: const HomePage(),
@@ -81,8 +77,6 @@ class _HomePageState extends State<HomePage> {
 
   PantryData get _data => PantryData(pantry: _items, quickAdd: _quick);
 
-  // Pull the newest remote file and merge it in (remote may have been edited
-  // elsewhere; local has anything not yet pushed).
   Future<void> _syncFromRemote() async {
     setState(() {
       _syncing = true;
@@ -109,9 +103,6 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  // Every change: stamp, save locally, then merge-push to GitHub in the
-  // background. On success we adopt whatever is now live (keeps ids/merges
-  // consistent). On failure the local copy stands and syncs next time.
   Future<void> _mutate(void Function() change) async {
     setState(change);
     final DateTime now = DateTime.now();
@@ -148,14 +139,22 @@ class _HomePageState extends State<HomePage> {
   void _deleteItem(PantryItem item) =>
       _mutate(() => _items.removeWhere((PantryItem x) => x.id == item.id));
 
-  void _logUsage(PantryItem item, double gramsUsed) => _mutate(() {
+  /// Adjust remaining amount. [add] true = bought more (raises remaining and,
+  /// if it would exceed total, total too). false = used some (clamps at 0).
+  void _adjust(PantryItem item, double amount, bool add) => _mutate(() {
         final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
         if (i < 0) {
           return;
         }
-        final double left = (_items[i].remainingWeightG - gramsUsed);
-        _items[i].remainingWeightG = left < 0 ? 0 : left;
-        _items[i].updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+        final PantryItem it = _items[i];
+        if (add) {
+          it.remaining += amount;
+          it.total += amount;
+        } else {
+          final double left = it.remaining - amount;
+          it.remaining = left < 0 ? 0 : left;
+        }
+        it.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
       });
 
   void _saveQuickAdd(PantryItem item) => _mutate(() {
@@ -164,9 +163,10 @@ class _HomePageState extends State<HomePage> {
         _quick.add(QuickAddItem(
           name: item.name,
           barcode: item.barcode,
+          unit: item.unit,
           lastPrice: item.price,
-          macrosPer100g: item.macrosPer100g,
-          lastTotalWeightG: item.totalWeightG,
+          macros: item.macros,
+          lastTotal: item.total,
         ));
       });
 
@@ -177,9 +177,7 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _startAdd({AddPrefill? prefill}) async {
     final PantryItem? made = await Navigator.of(context).push(
-      MaterialPageRoute<PantryItem>(
-        builder: (_) => AddItemPage(prefill: prefill),
-      ),
+      MaterialPageRoute<PantryItem>(builder: (_) => AddItemPage(prefill: prefill)),
     );
     if (made != null) {
       _addItem(made);
@@ -187,9 +185,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _addByBarcode() async {
-    final String? code = await Navigator.of(context).push(
-      MaterialPageRoute<String>(builder: (_) => const ScanPage()),
-    );
+    final String? code = await Navigator.of(context)
+        .push(MaterialPageRoute<String>(builder: (_) => const ScanPage()));
     if (code == null || !mounted) {
       return;
     }
@@ -201,7 +198,7 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) {
       return;
     }
-    Navigator.pop(context); // dismiss loader
+    Navigator.pop(context);
     if (info == null) {
       _snack("Barcode not found — enter it by hand.");
       _startAdd(prefill: AddPrefill(barcode: code));
@@ -212,7 +209,7 @@ class _HomePageState extends State<HomePage> {
         name: info.name,
         barcode: info.barcode ?? code,
         macros: info.macrosPer100g,
-        totalWeightG: info.packGrams,
+        total: info.packGrams,
       ),
     );
   }
@@ -220,8 +217,8 @@ class _HomePageState extends State<HomePage> {
   Future<void> _addByLabel() async {
     XFile? shot;
     try {
-      shot = await ImagePicker().pickImage(
-          source: ImageSource.camera, maxWidth: 2200, imageQuality: 92);
+      shot = await ImagePicker()
+          .pickImage(source: ImageSource.camera, maxWidth: 2200, imageQuality: 92);
     } catch (_) {}
     if (shot == null || !mounted) {
       return;
@@ -241,7 +238,7 @@ class _HomePageState extends State<HomePage> {
     if (!mounted) {
       return;
     }
-    Navigator.pop(context); // dismiss loader
+    Navigator.pop(context);
     final LabelParse parse = parseNutritionLabel(text);
     if (!parse.hasAnything) {
       _snack("Couldn't read the label — fill it in or retake the photo.");
@@ -256,30 +253,29 @@ class _HomePageState extends State<HomePage> {
                 proteinG: parse.protein ?? 0,
                 calories: parse.calories ?? 0,
                 carbsG: parse.carbs ?? 0,
-                fatG: parse.fat ?? 0,
-              )
+                fatG: parse.fat ?? 0)
             : Macros(
                 proteinG: per100.proteinG ?? 0,
                 calories: per100.calories ?? 0,
                 carbsG: per100.carbsG ?? 0,
-                fatG: per100.fatG ?? 0,
-              ),
+                fatG: per100.fatG ?? 0),
         macrosNote: per100 == null
-            ? 'Label was per serving and serving grams were not read — '
-                'these numbers are per serving; correct them to per 100 g.'
+            ? 'Label was per serving and serving grams were not read — these '
+                'numbers are per serving; correct them to per 100 g.'
             : null,
       ),
     );
   }
 
-  Future<void> _reAdd(QuickAddItem q) async {
+  void _reAdd(QuickAddItem q) {
     _startAdd(
       prefill: AddPrefill(
         name: q.name,
         barcode: q.barcode,
-        macros: q.macrosPer100g,
+        unit: q.unit,
+        macros: q.macros,
         price: q.lastPrice,
-        totalWeightG: q.lastTotalWeightG,
+        total: q.lastTotal,
       ),
     );
   }
@@ -293,8 +289,8 @@ class _HomePageState extends State<HomePage> {
       builder: (_) => Center(
         child: Container(
           padding: const EdgeInsets.all(22),
-          decoration: BoxDecoration(
-              color: kCard, borderRadius: BorderRadius.circular(14)),
+          decoration:
+              BoxDecoration(color: kCard, borderRadius: BorderRadius.circular(14)),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const CircularProgressIndicator(color: kAccent),
             const SizedBox(height: 14),
@@ -306,30 +302,59 @@ class _HomePageState extends State<HomePage> {
   }
 
   void _snack(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        backgroundColor: const Color(0xFF2A2A2A), content: Text(msg)));
+    ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(backgroundColor: const Color(0xFF2A2A2A), content: Text(msg)));
+  }
+
+  void _showAddMenu() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: kCard,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (_) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const SizedBox(height: 8),
+          _menuTile(Icons.qr_code_scanner_rounded, 'Scan barcode',
+              'Look up macros from Open Food Facts', () {
+            Navigator.pop(context);
+            _addByBarcode();
+          }),
+          _menuTile(Icons.document_scanner_rounded, 'Scan nutrition label',
+              'Read macros with the camera (OCR)', () {
+            Navigator.pop(context);
+            _addByLabel();
+          }),
+          _menuTile(Icons.edit_rounded, 'Enter manually',
+              'Type it in — weight or count', () {
+            Navigator.pop(context);
+            _startAdd();
+          }),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+  }
+
+  Widget _menuTile(
+      IconData icon, String title, String sub, VoidCallback onTap) {
+    return ListTile(
+      leading: Icon(icon, color: kAccent),
+      title: Text(title,
+          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
+      subtitle:
+          Text(sub, style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+      onTap: onTap,
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = <Widget>[
-      PantryTab(
-        items: _items,
-        onTapItem: _openItem,
-        onAddBarcode: _addByBarcode,
-        onAddLabel: _addByLabel,
-        onAddManual: () => _startAdd(),
-      ),
-      QuickAddTab(
-        quick: _quick,
-        onReAdd: _reAdd,
-        onDelete: _deleteQuickAdd,
-      ),
+      PantryTab(items: _items, onTapItem: _openItem),
+      QuickAddTab(quick: _quick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(
-        syncing: _syncing,
-        onSyncNow: _syncFromRemote,
-        itemCount: _items.length,
-      ),
+          syncing: _syncing, onSyncNow: _syncFromRemote, itemCount: _items.length),
     ];
 
     return Scaffold(
@@ -346,8 +371,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(
                 width: 16,
                 height: 16,
-                child:
-                    CircularProgressIndicator(strokeWidth: 2, color: kAccent)),
+                child: CircularProgressIndicator(strokeWidth: 2, color: kAccent)),
         ]),
         bottom: _syncMsg.isEmpty
             ? null
@@ -363,6 +387,18 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
       ),
+      // FAB lives on the OUTER Scaffold so it is positioned above the bottom
+      // NavigationBar (fixes the nav-bar overlap). Only shown on the Pantry tab.
+      floatingActionButton: _tab == 0
+          ? FloatingActionButton.extended(
+              backgroundColor: kAccent,
+              foregroundColor: Colors.black,
+              onPressed: _showAddMenu,
+              icon: const Icon(Icons.add),
+              label: const Text('Add',
+                  style: TextStyle(fontWeight: FontWeight.w700)),
+            )
+          : null,
       body: IndexedStack(index: _tab, children: pages),
       bottomNavigationBar: NavigationBar(
         backgroundColor: kCard,
@@ -372,8 +408,7 @@ class _HomePageState extends State<HomePage> {
         destinations: const <NavigationDestination>[
           NavigationDestination(
               icon: Icon(Icons.list_alt_rounded), label: 'Pantry'),
-          NavigationDestination(
-              icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
+          NavigationDestination(icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
           NavigationDestination(
               icon: Icon(Icons.settings_rounded), label: 'Settings'),
         ],
@@ -390,16 +425,15 @@ class _HomePageState extends State<HomePage> {
           borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
       builder: (_) => ItemSheet(
         item: item,
-        onLogUsage: (double g) {
+        onAdjust: (double amount, bool add) {
           Navigator.pop(context);
-          _logUsage(item, g);
+          _adjust(item, amount, add);
         },
         onEdit: () async {
           Navigator.pop(context);
           final PantryItem? edited = await Navigator.of(context).push(
             MaterialPageRoute<PantryItem>(
-              builder: (_) => AddItemPage(existing: item),
-            ),
+                builder: (_) => AddItemPage(existing: item)),
           );
           if (edited != null) {
             _replaceItem(edited);
@@ -426,23 +460,12 @@ class _HomePageState extends State<HomePage> {
 class PantryTab extends StatelessWidget {
   final List<PantryItem> items;
   final void Function(PantryItem) onTapItem;
-  final VoidCallback onAddBarcode;
-  final VoidCallback onAddLabel;
-  final VoidCallback onAddManual;
 
-  const PantryTab({
-    super.key,
-    required this.items,
-    required this.onTapItem,
-    required this.onAddBarcode,
-    required this.onAddLabel,
-    required this.onAddManual,
-  });
+  const PantryTab({super.key, required this.items, required this.onTapItem});
 
   @override
   Widget build(BuildContext context) {
     final DateTime now = DateTime.now();
-    // Expiring first, then alphabetical.
     final List<PantryItem> sorted = <PantryItem>[...items]..sort((a, b) {
         final bool ea = a.isExpiringSoon(now), eb = b.isExpiringSoon(now);
         if (ea != eb) {
@@ -451,23 +474,15 @@ class PantryTab extends StatelessWidget {
         return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       });
 
-    return Scaffold(
-      backgroundColor: Colors.transparent,
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: kAccent,
-        foregroundColor: Colors.black,
-        onPressed: () => _showAddMenu(context),
-        icon: const Icon(Icons.add),
-        label: const Text('Add', style: TextStyle(fontWeight: FontWeight.w700)),
-      ),
-      body: sorted.isEmpty
-          ? _empty()
-          : ListView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
-              itemCount: sorted.length,
-              itemBuilder: (_, int i) =>
-                  _row(context, sorted[i], now),
-            ),
+    if (sorted.isEmpty) {
+      return _empty();
+    }
+    // Bottom padding clears the FAB + the phone's gesture inset.
+    final double bottomPad = 96 + MediaQuery.of(context).viewPadding.bottom;
+    return ListView.builder(
+      padding: EdgeInsets.fromLTRB(12, 12, 12, bottomPad),
+      itemCount: sorted.length,
+      itemBuilder: (_, int i) => _row(context, sorted[i], now),
     );
   }
 
@@ -485,9 +500,9 @@ class PantryTab extends StatelessWidget {
 
   Widget _row(BuildContext context, PantryItem it, DateTime now) {
     final bool expiring = it.isExpiringSoon(now);
-    final double pct = it.totalWeightG > 0
-        ? (it.remainingWeightG / it.totalWeightG).clamp(0, 1)
-        : 0;
+    final double pct =
+        it.total > 0 ? (it.remaining / it.total).clamp(0, 1).toDouble() : 0;
+    final String u = it.unitLabel;
     return GestureDetector(
       onTap: () => onTapItem(it),
       child: Container(
@@ -505,10 +520,22 @@ class PantryTab extends StatelessWidget {
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600)),
             ),
+            if (it.isCount)
+              Container(
+                margin: const EdgeInsets.only(right: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                    color: kBg, borderRadius: BorderRadius.circular(20)),
+                child: Text('COUNT',
+                    style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.grey[500],
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.6)),
+              ),
             if (expiring)
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
                     color: kWarn.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(20)),
@@ -524,84 +551,42 @@ class PantryTab extends StatelessWidget {
           ClipRRect(
             borderRadius: BorderRadius.circular(3),
             child: LinearProgressIndicator(
-              value: pct.toDouble(),
+              value: pct,
               minHeight: 5,
               backgroundColor: const Color(0xFF111111),
-              valueColor: AlwaysStoppedAnimation<Color>(
-                  expiring ? kWarn : kAccent),
+              valueColor:
+                  AlwaysStoppedAnimation<Color>(expiring ? kWarn : kAccent),
             ),
           ),
           const SizedBox(height: 8),
           Row(children: [
-            Text('${_fmt(it.remainingWeightG)} / ${_fmt(it.totalWeightG)} g',
+            Text('${_fmt(it.remaining)} / ${_fmt(it.total)} $u',
                 style: TextStyle(fontSize: 12, color: Colors.grey[400])),
             const Spacer(),
             Text(
                 '\$${it.price.toStringAsFixed(2)}  ·  '
-                '\$${it.pricePerGram.toStringAsFixed(4)}/g',
+                '\$${it.pricePer.toStringAsFixed(it.isCount ? 2 : 4)}/$u',
                 style: TextStyle(fontSize: 12, color: Colors.grey[500])),
           ]),
           if (it.expirationDate != null && it.expirationDate!.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('Expires ${it.expirationDate}',
                 style: TextStyle(
-                    fontSize: 11,
-                    color: expiring ? kWarn : Colors.grey[600])),
+                    fontSize: 11, color: expiring ? kWarn : Colors.grey[600])),
           ],
         ]),
       ),
     );
   }
-
-  void _showAddMenu(BuildContext context) {
-    showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: kCard,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
-      builder: (_) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          const SizedBox(height: 8),
-          _menuTile(context, Icons.qr_code_scanner_rounded, 'Scan barcode',
-              'Look up macros from Open Food Facts', () {
-            Navigator.pop(context);
-            onAddBarcode();
-          }),
-          _menuTile(context, Icons.document_scanner_rounded,
-              'Scan nutrition label', 'Read macros with the camera (OCR)', () {
-            Navigator.pop(context);
-            onAddLabel();
-          }),
-          _menuTile(context, Icons.edit_rounded, 'Enter manually',
-              'Type it all in yourself', () {
-            Navigator.pop(context);
-            onAddManual();
-          }),
-          const SizedBox(height: 8),
-        ]),
-      ),
-    );
-  }
-
-  Widget _menuTile(BuildContext context, IconData icon, String title,
-      String sub, VoidCallback onTap) {
-    return ListTile(
-      leading: Icon(icon, color: kAccent),
-      title: Text(title,
-          style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
-      subtitle: Text(sub, style: TextStyle(color: Colors.grey[500], fontSize: 12)),
-      onTap: onTap,
-    );
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// ITEM SHEET — log usage / edit / delete / save as quick-add
+// ITEM SHEET — ± adjust / edit / delete / save as quick-add
 // ═══════════════════════════════════════════════════════════════════════
 
 class ItemSheet extends StatefulWidget {
   final PantryItem item;
-  final void Function(double gramsUsed) onLogUsage;
+  final void Function(double amount, bool add) onAdjust;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final VoidCallback onSaveQuickAdd;
@@ -609,7 +594,7 @@ class ItemSheet extends StatefulWidget {
   const ItemSheet({
     super.key,
     required this.item,
-    required this.onLogUsage,
+    required this.onAdjust,
     required this.onEdit,
     required this.onDelete,
     required this.onSaveQuickAdd,
@@ -620,18 +605,26 @@ class ItemSheet extends StatefulWidget {
 }
 
 class _ItemSheetState extends State<ItemSheet> {
-  final TextEditingController _used = TextEditingController();
+  final TextEditingController _amount = TextEditingController();
 
   @override
   void dispose() {
-    _used.dispose();
+    _amount.dispose();
     super.dispose();
+  }
+
+  void _do(bool add) {
+    final double a = double.tryParse(_amount.text.trim()) ?? 0;
+    if (a > 0) {
+      widget.onAdjust(a, add);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final PantryItem it = widget.item;
-    final Macros m = it.macrosPer100g;
+    final Macros m = it.macros;
+    final String u = it.unitLabel;
     return Padding(
       padding: EdgeInsets.only(
           left: 18,
@@ -654,59 +647,70 @@ class _ItemSheetState extends State<ItemSheet> {
         const SizedBox(height: 4),
         Align(
           alignment: Alignment.centerLeft,
-          child: Text(
-              '${_fmt(it.remainingWeightG)} g left of ${_fmt(it.totalWeightG)} g',
+          child: Text('${_fmt(it.remaining)} $u left of ${_fmt(it.total)} $u',
               style: TextStyle(color: Colors.grey[500], fontSize: 13)),
         ),
-        const SizedBox(height: 12),
-        Row(children: [
-          _macro('P', m.proteinG),
-          _macro('Cal', m.calories),
-          _macro('C', m.carbsG),
-          _macro('F', m.fatG),
-        ]),
+        if (!m.isEmpty) ...[
+          const SizedBox(height: 12),
+          Row(children: [
+            _macro('P', m.proteinG),
+            _macro('Cal', m.calories),
+            _macro('C', m.carbsG),
+            _macro('F', m.fatG),
+          ]),
+        ],
         const SizedBox(height: 18),
-        const Align(
+        Align(
           alignment: Alignment.centerLeft,
-          child: Text('LOG USAGE',
+          child: Text('ADJUST AMOUNT',
               style: TextStyle(
                   fontSize: 11,
-                  color: Colors.grey,
+                  color: Colors.grey[500],
                   letterSpacing: 1,
                   fontWeight: FontWeight.w600)),
         ),
         const SizedBox(height: 8),
+        TextField(
+          controller: _amount,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
+          ],
+          decoration: _dec(it.isCount ? 'count' : 'grams'),
+        ),
+        const SizedBox(height: 10),
         Row(children: [
           Expanded(
-            child: TextField(
-              controller: _used,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))
-              ],
-              decoration: _dec('grams used'),
+            child: ElevatedButton.icon(
+              onPressed: () => _do(false),
+              icon: const Icon(Icons.remove_rounded),
+              label: const Text('Use'),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kDanger,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10))),
             ),
           ),
           const SizedBox(width: 10),
-          ElevatedButton(
-            onPressed: () {
-              final double g = double.tryParse(_used.text.trim()) ?? 0;
-              if (g > 0) {
-                widget.onLogUsage(g);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-                backgroundColor: kAccent,
-                foregroundColor: Colors.black,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10))),
-            child: const Text('Subtract',
-                style: TextStyle(fontWeight: FontWeight.w700)),
+          Expanded(
+            child: ElevatedButton.icon(
+              onPressed: () => _do(true),
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add'),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10))),
+            ),
           ),
         ]),
+        const SizedBox(height: 6),
+        Text('Use = cooked/consumed.  Add = bought more.',
+            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
         const SizedBox(height: 16),
         Row(children: [
           Expanded(
@@ -736,7 +740,7 @@ class _ItemSheetState extends State<ItemSheet> {
           IconButton(
             onPressed: widget.onDelete,
             icon: const Icon(Icons.delete_outline_rounded),
-            color: const Color(0xFFCC6B6B),
+            color: kDanger,
           ),
         ]),
       ]),
@@ -747,14 +751,13 @@ class _ItemSheetState extends State<ItemSheet> {
         child: Container(
           margin: const EdgeInsets.symmetric(horizontal: 3),
           padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-              color: kBg, borderRadius: BorderRadius.circular(10)),
+          decoration:
+              BoxDecoration(color: kBg, borderRadius: BorderRadius.circular(10)),
           child: Column(children: [
             Text(v.toStringAsFixed(v >= 100 ? 0 : 1),
                 style:
                     const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            Text(label,
-                style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+            Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[500])),
           ]),
         ),
       );
@@ -768,16 +771,18 @@ class _ItemSheetState extends State<ItemSheet> {
 class AddPrefill {
   final String? name;
   final String? barcode;
+  final String? unit; // 'g' | 'count'
   final Macros? macros;
-  final double? totalWeightG;
+  final double? total;
   final double? price;
-  final String? macrosNote; // shown as a warning under the macro fields
+  final String? macrosNote;
 
   const AddPrefill({
     this.name,
     this.barcode,
+    this.unit,
     this.macros,
-    this.totalWeightG,
+    this.total,
     this.price,
     this.macrosNote,
   });
@@ -801,30 +806,31 @@ class _AddItemPageState extends State<AddItemPage> {
   late final TextEditingController _fat;
   late final TextEditingController _total;
   late final TextEditingController _price;
-  String? _expiration; // 'YYYY-MM-DD'
+  String? _expiration;
   String? _note;
+  late String _unit; // 'g' | 'count'
 
   @override
   void initState() {
     super.initState();
     final PantryItem? e = widget.existing;
     final AddPrefill? p = widget.prefill;
-    final Macros m = e?.macrosPer100g ?? p?.macros ?? const Macros();
+    final Macros m = e?.macros ?? p?.macros ?? const Macros();
+    _unit = e?.unit ?? p?.unit ?? kUnitGrams;
     _name = TextEditingController(text: e?.name ?? p?.name ?? '');
     _barcode = TextEditingController(text: e?.barcode ?? p?.barcode ?? '');
     _protein = TextEditingController(text: _pf(m.proteinG));
     _calories = TextEditingController(text: _pf(m.calories));
     _carbs = TextEditingController(text: _pf(m.carbsG));
     _fat = TextEditingController(text: _pf(m.fatG));
-    _total = TextEditingController(
-        text: _pf(e?.totalWeightG ?? p?.totalWeightG ?? 0));
+    _total =
+        TextEditingController(text: _pf(e?.total ?? p?.total ?? 0));
     _price = TextEditingController(text: _pf(e?.price ?? p?.price ?? 0));
     _expiration = e?.expirationDate;
     _note = p?.macrosNote;
   }
 
-  static String _pf(double? v) =>
-      (v == null || v == 0) ? '' : _fmt(v);
+  static String _pf(double? v) => (v == null || v == 0) ? '' : _fmt(v);
 
   @override
   void dispose() {
@@ -837,6 +843,7 @@ class _AddItemPageState extends State<AddItemPage> {
   }
 
   double _d(TextEditingController c) => double.tryParse(c.text.trim()) ?? 0;
+  bool get _isCount => _unit == kUnitCount;
 
   void _save() {
     final String name = _name.text.trim();
@@ -854,22 +861,20 @@ class _AddItemPageState extends State<AddItemPage> {
       fatG: _d(_fat),
     );
     final int nowMs = DateTime.now().millisecondsSinceEpoch;
-    final String today = _todayStr();
-
     final PantryItem? e = widget.existing;
     final PantryItem item = PantryItem(
       id: e?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
       name: name,
       barcode: _barcode.text.trim().isEmpty ? null : _barcode.text.trim(),
-      totalWeightG: total,
-      // On edit, keep whatever is remaining unless total shrank below it.
-      remainingWeightG: e == null
+      unit: _unit,
+      total: total,
+      remaining: e == null
           ? total
-          : (e.remainingWeightG > total ? total : e.remainingWeightG),
+          : (e.remaining > total ? total : e.remaining),
       price: _d(_price),
-      macrosPer100g: macros,
+      macros: macros,
       expirationDate: _expiration,
-      dateAdded: e?.dateAdded ?? today,
+      dateAdded: e?.dateAdded ?? _todayStr(),
       lastPrice: _d(_price),
       updatedAtMs: nowMs,
     );
@@ -879,6 +884,7 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   Widget build(BuildContext context) {
     final bool editing = widget.existing != null;
+    final String u = _isCount ? 'count' : 'g';
     return Scaffold(
       appBar: AppBar(
         backgroundColor: kBg,
@@ -886,13 +892,40 @@ class _AddItemPageState extends State<AddItemPage> {
         title: Text(editing ? 'Edit item' : 'Add item'),
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+        padding: EdgeInsets.fromLTRB(
+            16, 8, 16, 40 + MediaQuery.of(context).viewPadding.bottom),
         children: [
-          _field('Name', _name, hint: 'e.g. ground turkey'),
-          _field('Barcode (optional)', _barcode,
-              hint: 'digits', number: false),
-          const SizedBox(height: 10),
-          _sectionLabel('MACROS — per 100 g'),
+          _field('Name', _name, hint: 'e.g. ground turkey / eggs'),
+          _field('Barcode (optional)', _barcode, hint: 'digits'),
+          const SizedBox(height: 12),
+          _sectionLabel('TRACK BY'),
+          SegmentedButton<String>(
+            segments: const <ButtonSegment<String>>[
+              ButtonSegment<String>(
+                  value: kUnitGrams,
+                  label: Text('Weight (g)'),
+                  icon: Icon(Icons.scale_rounded, size: 18)),
+              ButtonSegment<String>(
+                  value: kUnitCount,
+                  label: Text('Count'),
+                  icon: Icon(Icons.tag_rounded, size: 18)),
+            ],
+            selected: <String>{_unit},
+            onSelectionChanged: (Set<String> s) =>
+                setState(() => _unit = s.first),
+            style: ButtonStyle(
+              backgroundColor: WidgetStateProperty.resolveWith((states) =>
+                  states.contains(WidgetState.selected)
+                      ? kAccent.withValues(alpha: 0.18)
+                      : kCard),
+              foregroundColor:
+                  WidgetStateProperty.all(Colors.grey[200]),
+            ),
+          ),
+          const SizedBox(height: 16),
+          _sectionLabel(_isCount
+              ? 'MACROS — per item (optional)'
+              : 'MACROS — per 100 g'),
           Row(children: [
             Expanded(child: _numField('Protein g', _protein)),
             const SizedBox(width: 10),
@@ -906,18 +939,19 @@ class _AddItemPageState extends State<AddItemPage> {
           ]),
           if (_note != null) ...[
             const SizedBox(height: 8),
-            Text(_note!,
-                style: const TextStyle(fontSize: 12, color: kWarn)),
+            Text(_note!, style: const TextStyle(fontSize: 12, color: kWarn)),
           ],
           const SizedBox(height: 16),
           _sectionLabel('AMOUNT & COST'),
           Row(children: [
-            Expanded(child: _numField('Total weight g', _total)),
+            Expanded(
+                child: _numField(
+                    _isCount ? 'Total count' : 'Total weight g', _total)),
             const SizedBox(width: 10),
             Expanded(child: _numField('Price \$', _price)),
           ]),
           const SizedBox(height: 6),
-          _pricePerGramPreview(),
+          _pricePerPreview(u),
           const SizedBox(height: 16),
           _sectionLabel('EXPIRATION (optional)'),
           _expirationPickerRow(),
@@ -933,8 +967,8 @@ class _AddItemPageState extends State<AddItemPage> {
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12))),
               child: Text(editing ? 'Save changes' : 'Add to pantry',
-                  style: const TextStyle(
-                      fontSize: 15, fontWeight: FontWeight.w700)),
+                  style:
+                      const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
             ),
           ),
         ],
@@ -942,7 +976,7 @@ class _AddItemPageState extends State<AddItemPage> {
     );
   }
 
-  Widget _pricePerGramPreview() {
+  Widget _pricePerPreview(String u) {
     final double total = _d(_total);
     final double price = _d(_price);
     final double ppg = total > 0 ? price / total : 0;
@@ -950,8 +984,9 @@ class _AddItemPageState extends State<AddItemPage> {
       alignment: Alignment.centerLeft,
       child: Text(
           total > 0
-              ? 'Price per gram: \$${ppg.toStringAsFixed(4)}/g'
-              : 'Enter total weight to compute price per gram.',
+              ? 'Price per ${_isCount ? "item" : "gram"}: '
+                  '\$${ppg.toStringAsFixed(_isCount ? 2 : 4)}/$u'
+              : 'Enter total ${_isCount ? "count" : "weight"} to compute price per ${_isCount ? "item" : "gram"}.',
           style: TextStyle(fontSize: 12, color: Colors.grey[500])),
     );
   }
@@ -966,7 +1001,7 @@ class _AddItemPageState extends State<AddItemPage> {
       if (_expiration != null)
         TextButton(
           onPressed: () => setState(() => _expiration = null),
-          child: const Text('Clear', style: TextStyle(color: Color(0xFFCC6B6B))),
+          child: const Text('Clear', style: TextStyle(color: kDanger)),
         ),
       OutlinedButton.icon(
         onPressed: _pickDate,
@@ -1002,22 +1037,18 @@ class _AddItemPageState extends State<AddItemPage> {
   Widget _sectionLabel(String s) => Padding(
         padding: const EdgeInsets.only(bottom: 8, top: 4),
         child: Text(s,
-            style: const TextStyle(
+            style: TextStyle(
                 fontSize: 11,
-                color: Colors.grey,
+                color: Colors.grey[500],
                 letterSpacing: 1,
                 fontWeight: FontWeight.w600)),
       );
 
-  Widget _field(String label, TextEditingController c,
-      {String? hint, bool number = false}) {
+  Widget _field(String label, TextEditingController c, {String? hint}) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: TextField(
         controller: c,
-        keyboardType: number
-            ? const TextInputType.numberWithOptions(decimal: true)
-            : TextInputType.text,
         decoration: _dec(hint ?? label, label: label),
       ),
     );
@@ -1028,7 +1059,7 @@ class _AddItemPageState extends State<AddItemPage> {
       controller: c,
       keyboardType: const TextInputType.numberWithOptions(decimal: true),
       inputFormatters: [FilteringTextInputFormatter.allow(RegExp(r'[0-9.]'))],
-      onChanged: (_) => setState(() {}), // refresh price-per-gram preview
+      onChanged: (_) => setState(() {}),
       decoration: _dec(label, label: label),
     );
   }
@@ -1070,11 +1101,15 @@ class QuickAddTab extends StatelessWidget {
         ]),
       );
     }
+    final double bottomPad = 24 + MediaQuery.of(context).viewPadding.bottom;
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      padding: EdgeInsets.fromLTRB(12, 12, 12, bottomPad),
       itemCount: quick.length,
       itemBuilder: (_, int i) {
         final QuickAddItem q = quick[i];
+        final String macroNote = q.macros.isEmpty
+            ? ''
+            : '  ·  ${_fmt(q.macros.proteinG)}g protein/${q.isCount ? "item" : "100g"}';
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
           decoration: BoxDecoration(
@@ -1084,9 +1119,7 @@ class QuickAddTab extends StatelessWidget {
           child: ListTile(
             title: Text(q.name,
                 style: const TextStyle(fontWeight: FontWeight.w600)),
-            subtitle: Text(
-                'Last \$${q.lastPrice.toStringAsFixed(2)}'
-                '${q.macrosPer100g.proteinG > 0 ? '  ·  ${_fmt(q.macrosPer100g.proteinG)}g protein/100g' : ''}',
+            subtitle: Text('Last \$${q.lastPrice.toStringAsFixed(2)}$macroNote',
                 style: TextStyle(color: Colors.grey[500], fontSize: 12)),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
               IconButton(
@@ -1127,8 +1160,9 @@ class SettingsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final double bottomPad = 40 + MediaQuery.of(context).viewPadding.bottom;
     return ListView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
+      padding: EdgeInsets.fromLTRB(16, 16, 16, bottomPad),
       children: [
         Container(
           padding: const EdgeInsets.all(16),
@@ -1202,13 +1236,14 @@ class ScanPage extends StatefulWidget {
 
 class _ScanPageState extends State<ScanPage> {
   final MobileScannerController _controller = MobileScannerController(
-      detectionSpeed: DetectionSpeed.noDuplicates, formats: <BarcodeFormat>[
-    BarcodeFormat.ean13,
-    BarcodeFormat.ean8,
-    BarcodeFormat.upcA,
-    BarcodeFormat.upcE,
-    BarcodeFormat.code128,
-  ]);
+      detectionSpeed: DetectionSpeed.noDuplicates,
+      formats: <BarcodeFormat>[
+        BarcodeFormat.ean13,
+        BarcodeFormat.ean8,
+        BarcodeFormat.upcA,
+        BarcodeFormat.upcE,
+        BarcodeFormat.code128,
+      ]);
   bool _handled = false;
 
   @override
@@ -1273,7 +1308,6 @@ class _ScanPageState extends State<ScanPage> {
 // SHARED HELPERS
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Format grams/weights: no decimals when whole, one otherwise.
 String _fmt(double v) =>
     v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
