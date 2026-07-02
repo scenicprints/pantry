@@ -37,7 +37,9 @@ class LocalCache {
   /// for [now] (same format as the remote file).
   static void save(PantryData data, DateTime now) {
     try {
-      _file.writeAsStringSync(data.encode(now));
+      // Keep tombstones locally so a delete survives an app restart even if
+      // the push to GitHub hasn't landed yet.
+      _file.writeAsStringSync(data.encode(now, keepDeleted: true));
     } catch (_) {}
   }
 

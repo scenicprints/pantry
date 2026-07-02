@@ -80,6 +80,28 @@ void main() {
     expect(back.remaining, 12);
   });
 
+  test('a deleted item is tombstoned in merge and dropped from the chef file',
+      () {
+    // Remote still holds the live item; local has deleted it (newer stamp).
+    final PantryData remote =
+        PantryData(pantry: <PantryItem>[_weight(updatedAtMs: 100)]);
+    final PantryItem gone = _weight(updatedAtMs: 200)..deleted = true;
+    final PantryData local = PantryData(pantry: <PantryItem>[gone]);
+
+    final PantryData merged = PantryData.merge(remote, local);
+    expect(merged.pantry.single.deleted, isTrue); // tombstone wins, not resurrected
+
+    // The GitHub file (keepDeleted:false) must NOT contain it...
+    final PantryData remoteFile =
+        PantryData.decode(merged.encode(DateTime(2026, 7, 2)));
+    expect(remoteFile.pantry, isEmpty);
+
+    // ...but the local cache (keepDeleted:true) keeps the tombstone.
+    final PantryData cache = PantryData.decode(
+        merged.encode(DateTime(2026, 7, 2), keepDeleted: true));
+    expect(cache.pantry.single.deleted, isTrue);
+  });
+
   test('weight item still emits the original grams schema', () {
     final Map<String, dynamic> j = _weight().toJson(DateTime(2026, 7, 2));
     expect(j['total_weight_g'], 454);
