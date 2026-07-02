@@ -4,17 +4,26 @@ import 'dart:convert';
 // DATA MODEL
 //
 // This is the pantry's schema — and it is the CONTRACT with the AI chef,
-// which reads the same JSON from GitHub. The on-disk / on-GitHub keys are
-// snake_case exactly as the master spec defines them; do not rename them
-// without updating the chef. `price_per_gram` and `expiring_soon` are
-// DERIVED and written out so the chef doesn't have to recompute them.
+// which reads the same JSON from GitHub. Keys are snake_case exactly as the
+// master spec defines them.
 //
-// `updated_at_ms` is an extra field the chef simply ignores; it lets the
-// sync layer do a last-write-wins merge instead of a blind overwrite.
+// An item is tracked either by WEIGHT (grams) or by COUNT (e.g. eggs):
+//   • weight items keep the original keys — total_weight_g / remaining_weight_g
+//     / price_per_gram / macros_per_100g  (chef unchanged)
+//   • count items use   unit:"count" + total_count / remaining_count /
+//     price_per_unit / (optional) macros_per_unit
+// Items with no `unit` are treated as weight — so old files still parse.
+//
+// `price_per_gram`/`price_per_unit` and `expiring_soon` are DERIVED and
+// written out so the chef doesn't recompute them. `updated_at_ms` is extra
+// bookkeeping the chef ignores; it drives last-write-wins merges.
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Per-100 g nutrition. Open Food Facts is already per-100 g; label OCR is
-/// converted to per-100 g before it lands here.
+const String kUnitGrams = 'g';
+const String kUnitCount = 'count';
+
+/// Nutrition. For weight items these are per 100 g; for count items they are
+/// per single unit (and are usually left empty — count items are "pure count").
 class Macros {
   final double proteinG;
   final double calories;
@@ -27,6 +36,9 @@ class Macros {
     this.carbsG = 0,
     this.fatG = 0,
   });
+
+  bool get isEmpty =>
+      proteinG == 0 && calories == 0 && carbsG == 0 && fatG == 0;
 
   Macros copyWith({
     double? proteinG,
@@ -61,117 +73,185 @@ class Macros {
   }
 }
 
-/// One item in the kitchen.
+/// One item in the kitchen. `total`/`remaining` are in grams when
+/// [unit] == 'g', or whole units when [unit] == 'count'.
 class PantryItem {
   final String id;
   String name;
   String? barcode;
-  double totalWeightG;
-  double remainingWeightG;
+  String unit; // 'g' | 'count'
+  double total;
+  double remaining;
   double price;
-  Macros macrosPer100g;
+  Macros macros; // per 100 g (weight) or per unit (count)
   String? expirationDate; // 'YYYY-MM-DD' or null
   String dateAdded; // 'YYYY-MM-DD'
   double lastPrice;
-  int updatedAtMs; // sync bookkeeping (chef ignores this)
+  int updatedAtMs;
 
   PantryItem({
     required this.id,
     required this.name,
     this.barcode,
-    required this.totalWeightG,
-    required this.remainingWeightG,
+    this.unit = kUnitGrams,
+    required this.total,
+    required this.remaining,
     required this.price,
-    required this.macrosPer100g,
+    required this.macros,
     this.expirationDate,
     required this.dateAdded,
     required this.lastPrice,
     this.updatedAtMs = 0,
   });
 
-  /// price ÷ total weight. Guards divide-by-zero for count-based items.
-  double get pricePerGram =>
-      totalWeightG > 0 ? price / totalWeightG : 0;
+  bool get isCount => unit == kUnitCount;
 
-  /// True when an expiration date is set and within [withinDays] of [now].
-  /// Also true once already expired.
+  /// price ÷ total. This is price-per-gram for weight items and
+  /// price-per-unit for count items. Guards divide-by-zero.
+  double get pricePer => total > 0 ? price / total : 0;
+
+  /// Short label for the amount: 'g' or 'ct'.
+  String get unitLabel => isCount ? 'ct' : 'g';
+
+  /// True when an expiration date is set and within [withinDays] of [now]
+  /// (also true once already expired).
   bool isExpiringSoon(DateTime now, {int withinDays = 5}) {
     final DateTime? exp = _parseDate(expirationDate);
     if (exp == null) {
       return false;
     }
     final DateTime today = DateTime(now.year, now.month, now.day);
-    final int daysLeft = exp.difference(today).inDays;
-    return daysLeft <= withinDays;
+    return exp.difference(today).inDays <= withinDays;
   }
 
-  Map<String, dynamic> toJson(DateTime now) => <String, dynamic>{
-        'id': id,
-        'name': name,
-        if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
-        'total_weight_g': _round(totalWeightG),
-        'remaining_weight_g': _round(remainingWeightG),
-        'price': _round2(price),
-        'price_per_gram': _round4(pricePerGram),
-        'macros_per_100g': macrosPer100g.toJson(),
-        if (expirationDate != null && expirationDate!.isNotEmpty)
-          'expiration_date': expirationDate,
-        'expiring_soon': isExpiringSoon(now),
-        'date_added': dateAdded,
-        'last_price': _round2(lastPrice),
-        'updated_at_ms': updatedAtMs,
+  Map<String, dynamic> toJson(DateTime now) {
+    final Map<String, dynamic> common = <String, dynamic>{
+      'id': id,
+      'name': name,
+      if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
+      'price': _round2(price),
+      if (expirationDate != null && expirationDate!.isNotEmpty)
+        'expiration_date': expirationDate,
+      'expiring_soon': isExpiringSoon(now),
+      'date_added': dateAdded,
+      'last_price': _round2(lastPrice),
+      'updated_at_ms': updatedAtMs,
+    };
+    if (isCount) {
+      return <String, dynamic>{
+        ...common,
+        'unit': kUnitCount,
+        'total_count': _round(total),
+        'remaining_count': _round(remaining),
+        'price_per_unit': _round4(pricePer),
+        if (!macros.isEmpty) 'macros_per_unit': macros.toJson(),
       };
+    }
+    return <String, dynamic>{
+      ...common,
+      'total_weight_g': _round(total),
+      'remaining_weight_g': _round(remaining),
+      'price_per_gram': _round4(pricePer),
+      'macros_per_100g': macros.toJson(),
+    };
+  }
 
-  factory PantryItem.fromJson(Map<String, dynamic> j) => PantryItem(
+  factory PantryItem.fromJson(Map<String, dynamic> j) {
+    final bool count =
+        j['unit'] == kUnitCount || j.containsKey('total_count');
+    if (count) {
+      return PantryItem(
         id: (j['id'] as String?) ?? '',
         name: (j['name'] as String?) ?? '',
         barcode: j['barcode'] as String?,
-        totalWeightG: _num(j['total_weight_g']),
-        remainingWeightG:
-            _num(j['remaining_weight_g'] ?? j['total_weight_g']),
+        unit: kUnitCount,
+        total: _num(j['total_count']),
+        remaining: _num(j['remaining_count'] ?? j['total_count']),
         price: _num(j['price']),
-        macrosPer100g:
-            Macros.fromJson(j['macros_per_100g'] as Map<String, dynamic>?),
+        macros: Macros.fromJson(j['macros_per_unit'] as Map<String, dynamic>?),
         expirationDate: j['expiration_date'] as String?,
         dateAdded: (j['date_added'] as String?) ?? '',
         lastPrice: _num(j['last_price'] ?? j['price']),
         updatedAtMs: (j['updated_at_ms'] as num?)?.toInt() ?? 0,
       );
+    }
+    return PantryItem(
+      id: (j['id'] as String?) ?? '',
+      name: (j['name'] as String?) ?? '',
+      barcode: j['barcode'] as String?,
+      unit: kUnitGrams,
+      total: _num(j['total_weight_g']),
+      remaining: _num(j['remaining_weight_g'] ?? j['total_weight_g']),
+      price: _num(j['price']),
+      macros: Macros.fromJson(j['macros_per_100g'] as Map<String, dynamic>?),
+      expirationDate: j['expiration_date'] as String?,
+      dateAdded: (j['date_added'] as String?) ?? '',
+      lastPrice: _num(j['last_price'] ?? j['price']),
+      updatedAtMs: (j['updated_at_ms'] as num?)?.toInt() ?? 0,
+    );
+  }
 }
 
 /// A one-tap re-add for a frequent purchase.
 class QuickAddItem {
   String name;
   String? barcode;
+  String unit;
   double lastPrice;
-  Macros macrosPer100g;
-  double? lastTotalWeightG; // remembered so re-add can pre-fill the amount too
+  Macros macros;
+  double? lastTotal; // remembered amount (grams or count) to pre-fill
 
   QuickAddItem({
     required this.name,
     this.barcode,
+    this.unit = kUnitGrams,
     required this.lastPrice,
-    required this.macrosPer100g,
-    this.lastTotalWeightG,
+    required this.macros,
+    this.lastTotal,
   });
 
-  Map<String, dynamic> toJson() => <String, dynamic>{
-        'name': name,
-        if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
-        'last_price': _round2(lastPrice),
-        'macros_per_100g': macrosPer100g.toJson(),
-        if (lastTotalWeightG != null)
-          'last_total_weight_g': _round(lastTotalWeightG!),
-      };
+  bool get isCount => unit == kUnitCount;
 
-  factory QuickAddItem.fromJson(Map<String, dynamic> j) => QuickAddItem(
-        name: (j['name'] as String?) ?? '',
-        barcode: j['barcode'] as String?,
-        lastPrice: _num(j['last_price']),
-        macrosPer100g:
-            Macros.fromJson(j['macros_per_100g'] as Map<String, dynamic>?),
-        lastTotalWeightG: (j['last_total_weight_g'] as num?)?.toDouble(),
-      );
+  Map<String, dynamic> toJson() {
+    final Map<String, dynamic> m = <String, dynamic>{
+      'name': name,
+      if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
+      'last_price': _round2(lastPrice),
+    };
+    if (isCount) {
+      m['unit'] = kUnitCount;
+      if (!macros.isEmpty) {
+        m['macros_per_unit'] = macros.toJson();
+      }
+      if (lastTotal != null) {
+        m['last_total_count'] = _round(lastTotal!);
+      }
+    } else {
+      m['macros_per_100g'] = macros.toJson();
+      if (lastTotal != null) {
+        m['last_total_weight_g'] = _round(lastTotal!);
+      }
+    }
+    return m;
+  }
+
+  factory QuickAddItem.fromJson(Map<String, dynamic> j) {
+    final bool count =
+        j['unit'] == kUnitCount || j.containsKey('last_total_count');
+    return QuickAddItem(
+      name: (j['name'] as String?) ?? '',
+      barcode: j['barcode'] as String?,
+      unit: count ? kUnitCount : kUnitGrams,
+      lastPrice: _num(j['last_price']),
+      macros: Macros.fromJson((count
+          ? j['macros_per_unit']
+          : j['macros_per_100g']) as Map<String, dynamic>?),
+      lastTotal: (count
+              ? (j['last_total_count'] as num?)
+              : (j['last_total_weight_g'] as num?))
+          ?.toDouble(),
+    );
+  }
 }
 
 /// The whole file: `{ "pantry": [...], "quick_add_items": [...] }`.
@@ -181,8 +261,6 @@ class PantryData {
 
   const PantryData({this.pantry = const [], this.quickAdd = const []});
 
-  /// Pretty-printed so the GitHub diff is human-readable. [now] is used to
-  /// stamp the derived `expiring_soon` flag at write time.
   String encode(DateTime now) {
     const JsonEncoder enc = JsonEncoder.withIndent('  ');
     return enc.convert(<String, dynamic>{
@@ -213,9 +291,8 @@ class PantryData {
   }
 
   /// Last-write-wins merge onto the latest fetched copy (never a blind
-  /// overwrite). Pantry items are keyed by id; the higher `updated_at_ms`
-  /// wins. Quick-adds are keyed by lower-cased name; the app's copy wins on
-  /// ties since it just wrote it.
+  /// overwrite). Pantry items keyed by id; higher `updated_at_ms` wins.
+  /// Quick-adds keyed by lower-cased name; the local copy wins.
   static PantryData merge(PantryData remote, PantryData local) {
     final Map<String, PantryItem> items = <String, PantryItem>{};
     for (final PantryItem i in <PantryItem>[...remote.pantry, ...local.pantry]) {
@@ -233,7 +310,7 @@ class PantryData {
       quick[q.name.toLowerCase()] = q;
     }
     for (final QuickAddItem q in local.quickAdd) {
-      quick[q.name.toLowerCase()] = q; // local wins
+      quick[q.name.toLowerCase()] = q;
     }
     final List<QuickAddItem> mergedQuick = quick.values.toList()
       ..sort((QuickAddItem a, QuickAddItem b) =>
@@ -262,7 +339,6 @@ DateTime? _parseDate(String? s) {
   return DateTime.tryParse(s);
 }
 
-// Rounding keeps the JSON tidy: whole grams, cents for money, 4 dp for /g.
 double _round(double v) => (v * 10).round() / 10;
 double _round2(double v) => (v * 100).round() / 100;
 double _round4(double v) => (v * 10000).round() / 10000;
