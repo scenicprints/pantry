@@ -88,6 +88,7 @@ class PantryItem {
   String dateAdded; // 'YYYY-MM-DD'
   double lastPrice;
   int updatedAtMs;
+  bool deleted; // tombstone — a delete that must propagate through the merge
 
   PantryItem({
     required this.id,
@@ -102,6 +103,7 @@ class PantryItem {
     required this.dateAdded,
     required this.lastPrice,
     this.updatedAtMs = 0,
+    this.deleted = false,
   });
 
   bool get isCount => unit == kUnitCount;
@@ -136,6 +138,7 @@ class PantryItem {
       'date_added': dateAdded,
       'last_price': _round2(lastPrice),
       'updated_at_ms': updatedAtMs,
+      if (deleted) 'deleted': true,
     };
     if (isCount) {
       return <String, dynamic>{
@@ -173,6 +176,7 @@ class PantryItem {
         dateAdded: (j['date_added'] as String?) ?? '',
         lastPrice: _num(j['last_price'] ?? j['price']),
         updatedAtMs: (j['updated_at_ms'] as num?)?.toInt() ?? 0,
+        deleted: j['deleted'] == true,
       );
     }
     return PantryItem(
@@ -188,6 +192,7 @@ class PantryItem {
       dateAdded: (j['date_added'] as String?) ?? '',
       lastPrice: _num(j['last_price'] ?? j['price']),
       updatedAtMs: (j['updated_at_ms'] as num?)?.toInt() ?? 0,
+      deleted: j['deleted'] == true,
     );
   }
 }
@@ -200,6 +205,7 @@ class QuickAddItem {
   double lastPrice;
   Macros macros;
   double? lastTotal; // remembered amount (grams or count) to pre-fill
+  bool deleted; // tombstone so a delete propagates through the merge
 
   QuickAddItem({
     required this.name,
@@ -208,6 +214,7 @@ class QuickAddItem {
     required this.lastPrice,
     required this.macros,
     this.lastTotal,
+    this.deleted = false,
   });
 
   bool get isCount => unit == kUnitCount;
@@ -217,6 +224,7 @@ class QuickAddItem {
       'name': name,
       if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
       'last_price': _round2(lastPrice),
+      if (deleted) 'deleted': true,
     };
     if (isCount) {
       m['unit'] = kUnitCount;
@@ -250,6 +258,7 @@ class QuickAddItem {
               ? (j['last_total_count'] as num?)
               : (j['last_total_weight_g'] as num?))
           ?.toDouble(),
+      deleted: j['deleted'] == true,
     );
   }
 }
@@ -261,12 +270,18 @@ class PantryData {
 
   const PantryData({this.pantry = const [], this.quickAdd = const []});
 
-  String encode(DateTime now) {
+  /// Encode the file. [keepDeleted] retains tombstones — true for the local
+  /// cache (so a delete survives an app restart), false for the GitHub file
+  /// the chef reads (so deleted items simply disappear from it).
+  String encode(DateTime now, {bool keepDeleted = false}) {
     const JsonEncoder enc = JsonEncoder.withIndent('  ');
+    final Iterable<PantryItem> items =
+        keepDeleted ? pantry : pantry.where((PantryItem i) => !i.deleted);
+    final Iterable<QuickAddItem> quick =
+        keepDeleted ? quickAdd : quickAdd.where((QuickAddItem q) => !q.deleted);
     return enc.convert(<String, dynamic>{
-      'pantry': pantry.map((PantryItem i) => i.toJson(now)).toList(),
-      'quick_add_items':
-          quickAdd.map((QuickAddItem q) => q.toJson()).toList(),
+      'pantry': items.map((PantryItem i) => i.toJson(now)).toList(),
+      'quick_add_items': quick.map((QuickAddItem q) => q.toJson()).toList(),
     });
   }
 

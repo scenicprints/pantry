@@ -136,8 +136,15 @@ class _HomePageState extends State<HomePage> {
         }
       });
 
-  void _deleteItem(PantryItem item) =>
-      _mutate(() => _items.removeWhere((PantryItem x) => x.id == item.id));
+  // Deletes are tombstoned (not removed) so they propagate through the merge
+  // instead of being resurrected from the remote copy on the next sync.
+  void _deleteItem(PantryItem item) => _mutate(() {
+        final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
+        if (i >= 0) {
+          _items[i].deleted = true;
+          _items[i].updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+        }
+      });
 
   /// Adjust remaining amount. [add] true = bought more (raises remaining and,
   /// if it would exceed total, total too). false = used some (clamps at 0).
@@ -170,8 +177,12 @@ class _HomePageState extends State<HomePage> {
         ));
       });
 
-  void _deleteQuickAdd(QuickAddItem q) =>
-      _mutate(() => _quick.removeWhere((QuickAddItem x) => x.name == q.name));
+  void _deleteQuickAdd(QuickAddItem q) => _mutate(() {
+        final int i = _quick.indexWhere((QuickAddItem x) => x.name == q.name);
+        if (i >= 0) {
+          _quick[i].deleted = true;
+        }
+      });
 
   // ── add flows ─────────────────────────────────────────────────────────
 
@@ -350,11 +361,19 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // Tombstoned (deleted) entries stay in the lists for sync but never show.
+    final List<PantryItem> visibleItems =
+        _items.where((PantryItem i) => !i.deleted).toList();
+    final List<QuickAddItem> visibleQuick =
+        _quick.where((QuickAddItem q) => !q.deleted).toList();
     final List<Widget> pages = <Widget>[
-      PantryTab(items: _items, onTapItem: _openItem),
-      QuickAddTab(quick: _quick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
+      PantryTab(items: visibleItems, onTapItem: _openItem),
+      QuickAddTab(
+          quick: visibleQuick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(
-          syncing: _syncing, onSyncNow: _syncFromRemote, itemCount: _items.length),
+          syncing: _syncing,
+          onSyncNow: _syncFromRemote,
+          itemCount: visibleItems.length),
     ];
 
     return Scaffold(
