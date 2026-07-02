@@ -649,7 +649,11 @@ class _ItemSheetState extends State<ItemSheet> {
           left: 18,
           right: 18,
           top: 18,
-          bottom: MediaQuery.of(context).viewInsets.bottom + 18),
+          // viewInsets = keyboard; viewPadding.bottom = the phone's gesture /
+          // nav bar. Include both so the action row is never hidden behind it.
+          bottom: MediaQuery.of(context).viewInsets.bottom +
+              MediaQuery.of(context).viewPadding.bottom +
+              18),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
             width: 40,
