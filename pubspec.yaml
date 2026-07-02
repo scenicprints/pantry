@@ -1,0 +1,35 @@
+name: pantry
+description: "Pantry inventory & cost tracker — scans groceries and syncs a JSON pantry to GitHub for the AI chef to read."
+publish_to: 'none'
+
+# Version is the single source of truth for the app's version.
+# publish.ps1 bumps this; the in-app updater compares it to the latest
+# GitHub Release. (Mirrors the BodyComp pipeline.)
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.9.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # GitHub sync + in-app OTA updater
+  http: ^1.2.2               # Open Food Facts + GitHub Contents/Releases API
+  package_info_plus: ^8.1.0  # read the installed app version
+  ota_update: ^7.0.0         # download + install a newer APK
+
+  # Scanning
+  mobile_scanner: ^7.2.0                   # barcode scanning via the camera
+  image_picker: ^1.1.2                     # capture a Nutrition Facts photo
+  google_mlkit_text_recognition: ^0.13.0   # on-device OCR of the label
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
