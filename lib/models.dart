@@ -1,29 +1,34 @@
 import 'dart:convert';
 
 // ═══════════════════════════════════════════════════════════════════════
-// DATA MODEL
+// DATA MODEL  —  the schema is the CONTRACT with the AI chef.
 //
-// This is the pantry's schema — and it is the CONTRACT with the AI chef,
-// which reads the same JSON from GitHub. Keys are snake_case exactly as the
-// master spec defines them.
+// Two independent ideas per item:
+//   • TRACKING  — how stock is measured: by weight (grams) or by count.
+//       weight → total_weight_g / remaining_weight_g / price_per_gram
+//       count  → unit:"count" + total_count / remaining_count / price_per_unit
+//   • NUTRITION — entered PER SERVING (straight off the label):
+//       serving_size + serving_unit + macros_per_serving
+//     When the serving unit is grams we also emit a derived macros_per_100g
+//     so older chef logic keeps working.
 //
-// An item is tracked either by WEIGHT (grams) or by COUNT (e.g. eggs):
-//   • weight items keep the original keys — total_weight_g / remaining_weight_g
-//     / price_per_gram / macros_per_100g  (chef unchanged)
-//   • count items use   unit:"count" + total_count / remaining_count /
-//     price_per_unit / (optional) macros_per_unit
-// Items with no `unit` are treated as weight — so old files still parse.
+// Backward compatible: old files with macros_per_100g / macros_per_unit are
+// migrated to a per-serving representation on read.
 //
-// `price_per_gram`/`price_per_unit` and `expiring_soon` are DERIVED and
-// written out so the chef doesn't recompute them. `updated_at_ms` is extra
-// bookkeeping the chef ignores; it drives last-write-wins merges.
+// `price_per_*`, `expiring_soon`, and the derived `macros_per_100g` are
+// written out so the chef needn't recompute them. `updated_at_ms` drives the
+// last-write-wins merge; `deleted` is a tombstone. The chef ignores both.
 // ═══════════════════════════════════════════════════════════════════════
 
 const String kUnitGrams = 'g';
 const String kUnitCount = 'count';
 
-/// Nutrition. For weight items these are per 100 g; for count items they are
-/// per single unit (and are usually left empty — count items are "pure count").
+/// Common serving units offered in the UI (plus a free-text "custom").
+const List<String> kServingUnits = <String>[
+  'g', 'oz', 'ml', 'cup', 'tbsp', 'tsp', 'piece',
+];
+
+/// Nutrition for ONE serving.
 class Macros {
   final double proteinG;
   final double calories;
@@ -39,6 +44,14 @@ class Macros {
 
   bool get isEmpty =>
       proteinG == 0 && calories == 0 && carbsG == 0 && fatG == 0;
+
+  /// Scale every value by [f] (e.g. to convert a serving to per-100 g).
+  Macros scale(double f) => Macros(
+        proteinG: proteinG * f,
+        calories: calories * f,
+        carbsG: carbsG * f,
+        fatG: fatG * f,
+      );
 
   Macros copyWith({
     double? proteinG,
@@ -73,22 +86,23 @@ class Macros {
   }
 }
 
-/// One item in the kitchen. `total`/`remaining` are in grams when
-/// [unit] == 'g', or whole units when [unit] == 'count'.
+/// One item in the kitchen.
 class PantryItem {
   final String id;
   String name;
   String? barcode;
-  String unit; // 'g' | 'count'
+  String unit; // tracking unit: 'g' | 'count'
   double total;
   double remaining;
   double price;
-  Macros macros; // per 100 g (weight) or per unit (count)
+  Macros macros; // PER SERVING
+  double servingSize; // amount in one serving (0 = unset)
+  String servingUnit; // e.g. 'g', 'oz', 'cup', 'cookie'
   String? expirationDate; // 'YYYY-MM-DD' or null
   String dateAdded; // 'YYYY-MM-DD'
   double lastPrice;
   int updatedAtMs;
-  bool deleted; // tombstone — a delete that must propagate through the merge
+  bool deleted;
 
   PantryItem({
     required this.id,
@@ -99,6 +113,8 @@ class PantryItem {
     required this.remaining,
     required this.price,
     required this.macros,
+    this.servingSize = 0,
+    this.servingUnit = 'g',
     this.expirationDate,
     required this.dateAdded,
     required this.lastPrice,
@@ -108,15 +124,15 @@ class PantryItem {
 
   bool get isCount => unit == kUnitCount;
 
-  /// price ÷ total. This is price-per-gram for weight items and
-  /// price-per-unit for count items. Guards divide-by-zero.
+  /// price ÷ total — price-per-gram (weight) or price-per-unit (count).
   double get pricePer => total > 0 ? price / total : 0;
 
-  /// Short label for the amount: 'g' or 'ct'.
   String get unitLabel => isCount ? 'ct' : 'g';
 
-  /// True when an expiration date is set and within [withinDays] of [now]
-  /// (also true once already expired).
+  /// Human serving label, e.g. "30 g" or "2 cookie". Empty if unset.
+  String get servingLabel =>
+      servingSize > 0 ? '${_trim(servingSize)} $servingUnit' : '';
+
   bool isExpiringSoon(DateTime now, {int withinDays = 5}) {
     final DateTime? exp = _parseDate(expirationDate);
     if (exp == null) {
@@ -127,11 +143,18 @@ class PantryItem {
   }
 
   Map<String, dynamic> toJson(DateTime now) {
-    final Map<String, dynamic> common = <String, dynamic>{
+    final Map<String, dynamic> m = <String, dynamic>{
       'id': id,
       'name': name,
       if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
       'price': _round2(price),
+      if (servingSize > 0) 'serving_size': _round(servingSize),
+      if (servingSize > 0) 'serving_unit': servingUnit,
+      if (!macros.isEmpty) 'macros_per_serving': macros.toJson(),
+      // Derived per-100 g when the serving is in grams — keeps older chef
+      // logic (and any per-100 g consumers) working unchanged.
+      if (!macros.isEmpty && servingUnit == 'g' && servingSize > 0)
+        'macros_per_100g': macros.scale(100 / servingSize).toJson(),
       if (expirationDate != null && expirationDate!.isNotEmpty)
         'expiration_date': expirationDate,
       'expiring_soon': isExpiringSoon(now),
@@ -141,27 +164,44 @@ class PantryItem {
       if (deleted) 'deleted': true,
     };
     if (isCount) {
-      return <String, dynamic>{
-        ...common,
-        'unit': kUnitCount,
-        'total_count': _round(total),
-        'remaining_count': _round(remaining),
-        'price_per_unit': _round4(pricePer),
-        if (!macros.isEmpty) 'macros_per_unit': macros.toJson(),
-      };
+      m['unit'] = kUnitCount;
+      m['total_count'] = _round(total);
+      m['remaining_count'] = _round(remaining);
+      m['price_per_unit'] = _round4(pricePer);
+    } else {
+      m['total_weight_g'] = _round(total);
+      m['remaining_weight_g'] = _round(remaining);
+      m['price_per_gram'] = _round4(pricePer);
     }
-    return <String, dynamic>{
-      ...common,
-      'total_weight_g': _round(total),
-      'remaining_weight_g': _round(remaining),
-      'price_per_gram': _round4(pricePer),
-      'macros_per_100g': macros.toJson(),
-    };
+    return m;
   }
 
   factory PantryItem.fromJson(Map<String, dynamic> j) {
-    final bool count =
-        j['unit'] == kUnitCount || j.containsKey('total_count');
+    final bool count = j['unit'] == kUnitCount || j.containsKey('total_count');
+
+    // Nutrition migration: prefer per-serving; fall back to legacy per-100 g
+    // (a 100 g serving) or per-unit (a 1-unit serving).
+    Macros macros;
+    double servingSize;
+    String servingUnit;
+    if (j['macros_per_serving'] != null) {
+      macros = Macros.fromJson(j['macros_per_serving'] as Map<String, dynamic>?);
+      servingSize = _num(j['serving_size']);
+      servingUnit = (j['serving_unit'] as String?) ?? 'g';
+    } else if (j['macros_per_100g'] != null) {
+      macros = Macros.fromJson(j['macros_per_100g'] as Map<String, dynamic>?);
+      servingSize = 100;
+      servingUnit = 'g';
+    } else if (j['macros_per_unit'] != null) {
+      macros = Macros.fromJson(j['macros_per_unit'] as Map<String, dynamic>?);
+      servingSize = 1;
+      servingUnit = 'serving';
+    } else {
+      macros = const Macros();
+      servingSize = _num(j['serving_size']);
+      servingUnit = (j['serving_unit'] as String?) ?? 'g';
+    }
+
     if (count) {
       return PantryItem(
         id: (j['id'] as String?) ?? '',
@@ -171,7 +211,9 @@ class PantryItem {
         total: _num(j['total_count']),
         remaining: _num(j['remaining_count'] ?? j['total_count']),
         price: _num(j['price']),
-        macros: Macros.fromJson(j['macros_per_unit'] as Map<String, dynamic>?),
+        macros: macros,
+        servingSize: servingSize,
+        servingUnit: servingUnit,
         expirationDate: j['expiration_date'] as String?,
         dateAdded: (j['date_added'] as String?) ?? '',
         lastPrice: _num(j['last_price'] ?? j['price']),
@@ -187,7 +229,9 @@ class PantryItem {
       total: _num(j['total_weight_g']),
       remaining: _num(j['remaining_weight_g'] ?? j['total_weight_g']),
       price: _num(j['price']),
-      macros: Macros.fromJson(j['macros_per_100g'] as Map<String, dynamic>?),
+      macros: macros,
+      servingSize: servingSize,
+      servingUnit: servingUnit,
       expirationDate: j['expiration_date'] as String?,
       dateAdded: (j['date_added'] as String?) ?? '',
       lastPrice: _num(j['last_price'] ?? j['price']),
@@ -203,9 +247,11 @@ class QuickAddItem {
   String? barcode;
   String unit;
   double lastPrice;
-  Macros macros;
-  double? lastTotal; // remembered amount (grams or count) to pre-fill
-  bool deleted; // tombstone so a delete propagates through the merge
+  Macros macros; // per serving
+  double servingSize;
+  String servingUnit;
+  double? lastTotal;
+  bool deleted;
 
   QuickAddItem({
     required this.name,
@@ -213,6 +259,8 @@ class QuickAddItem {
     this.unit = kUnitGrams,
     required this.lastPrice,
     required this.macros,
+    this.servingSize = 0,
+    this.servingUnit = 'g',
     this.lastTotal,
     this.deleted = false,
   });
@@ -224,21 +272,18 @@ class QuickAddItem {
       'name': name,
       if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
       'last_price': _round2(lastPrice),
+      if (servingSize > 0) 'serving_size': _round(servingSize),
+      if (servingSize > 0) 'serving_unit': servingUnit,
+      if (!macros.isEmpty) 'macros_per_serving': macros.toJson(),
       if (deleted) 'deleted': true,
     };
     if (isCount) {
       m['unit'] = kUnitCount;
-      if (!macros.isEmpty) {
-        m['macros_per_unit'] = macros.toJson();
-      }
       if (lastTotal != null) {
         m['last_total_count'] = _round(lastTotal!);
       }
-    } else {
-      m['macros_per_100g'] = macros.toJson();
-      if (lastTotal != null) {
-        m['last_total_weight_g'] = _round(lastTotal!);
-      }
+    } else if (lastTotal != null) {
+      m['last_total_weight_g'] = _round(lastTotal!);
     }
     return m;
   }
@@ -246,14 +291,34 @@ class QuickAddItem {
   factory QuickAddItem.fromJson(Map<String, dynamic> j) {
     final bool count =
         j['unit'] == kUnitCount || j.containsKey('last_total_count');
+    Macros macros;
+    double servingSize;
+    String servingUnit;
+    if (j['macros_per_serving'] != null) {
+      macros = Macros.fromJson(j['macros_per_serving'] as Map<String, dynamic>?);
+      servingSize = _num(j['serving_size']);
+      servingUnit = (j['serving_unit'] as String?) ?? 'g';
+    } else if (j['macros_per_100g'] != null) {
+      macros = Macros.fromJson(j['macros_per_100g'] as Map<String, dynamic>?);
+      servingSize = 100;
+      servingUnit = 'g';
+    } else if (j['macros_per_unit'] != null) {
+      macros = Macros.fromJson(j['macros_per_unit'] as Map<String, dynamic>?);
+      servingSize = 1;
+      servingUnit = 'serving';
+    } else {
+      macros = const Macros();
+      servingSize = _num(j['serving_size']);
+      servingUnit = (j['serving_unit'] as String?) ?? 'g';
+    }
     return QuickAddItem(
       name: (j['name'] as String?) ?? '',
       barcode: j['barcode'] as String?,
       unit: count ? kUnitCount : kUnitGrams,
       lastPrice: _num(j['last_price']),
-      macros: Macros.fromJson((count
-          ? j['macros_per_unit']
-          : j['macros_per_100g']) as Map<String, dynamic>?),
+      macros: macros,
+      servingSize: servingSize,
+      servingUnit: servingUnit,
       lastTotal: (count
               ? (j['last_total_count'] as num?)
               : (j['last_total_weight_g'] as num?))
@@ -270,9 +335,8 @@ class PantryData {
 
   const PantryData({this.pantry = const [], this.quickAdd = const []});
 
-  /// Encode the file. [keepDeleted] retains tombstones — true for the local
-  /// cache (so a delete survives an app restart), false for the GitHub file
-  /// the chef reads (so deleted items simply disappear from it).
+  /// [keepDeleted] retains tombstones — true for the local cache (a delete
+  /// survives a restart), false for the GitHub file the chef reads.
   String encode(DateTime now, {bool keepDeleted = false}) {
     const JsonEncoder enc = JsonEncoder.withIndent('  ');
     final Iterable<PantryItem> items =
@@ -305,9 +369,9 @@ class PantryData {
     return const PantryData();
   }
 
-  /// Last-write-wins merge onto the latest fetched copy (never a blind
-  /// overwrite). Pantry items keyed by id; higher `updated_at_ms` wins.
-  /// Quick-adds keyed by lower-cased name; the local copy wins.
+  /// Last-write-wins merge onto the latest fetched copy. Pantry items keyed
+  /// by id (higher `updated_at_ms` wins); quick-adds keyed by lower-cased
+  /// name (local wins).
   static PantryData merge(PantryData remote, PantryData local) {
     final Map<String, PantryItem> items = <String, PantryItem>{};
     for (final PantryItem i in <PantryItem>[...remote.pantry, ...local.pantry]) {
@@ -353,6 +417,9 @@ DateTime? _parseDate(String? s) {
   }
   return DateTime.tryParse(s);
 }
+
+String _trim(double v) =>
+    v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
 double _round(double v) => (v * 10).round() / 10;
 double _round2(double v) => (v * 100).round() / 100;
