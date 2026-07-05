@@ -30,6 +30,17 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.1  # generates the launcher icon
+
+# App launcher icon. Source art (green mason jar on the dark app bg) is
+# produced by scratchpad/gen_icon.py → assets/icon/*.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/pantry_icon.png"
+  adaptive_icon_background: "#0E0F12"
+  adaptive_icon_foreground: "assets/icon/pantry_icon_fg.png"
+  min_sdk_android: 26
 
 flutter:
   uses-material-design: true

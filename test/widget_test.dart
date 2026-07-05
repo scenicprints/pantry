@@ -21,6 +21,8 @@ PantryItem _weight({
       remaining: remaining,
       price: price,
       macros: const Macros(proteinG: 27, calories: 170, fatG: 9),
+      servingSize: 100,
+      servingUnit: 'g',
       dateAdded: '2026-07-02',
       lastPrice: price,
       updatedAtMs: updatedAtMs,
@@ -109,5 +111,62 @@ void main() {
     expect(j.containsKey('price_per_gram'), isTrue);
     expect(j.containsKey('macros_per_100g'), isTrue);
     expect(j.containsKey('unit'), isFalse); // weight is the implicit default
+  });
+
+  test('per-serving macros derive per-100 g when the serving is in grams', () {
+    // 30 g serving with 6 g protein → 20 g protein / 100 g.
+    final PantryItem it = PantryItem(
+      id: 's1',
+      name: 'crackers',
+      total: 200,
+      remaining: 200,
+      price: 3,
+      macros: const Macros(proteinG: 6, calories: 120),
+      servingSize: 30,
+      servingUnit: 'g',
+      dateAdded: '2026-07-02',
+      lastPrice: 3,
+    );
+    final Map<String, dynamic> j = it.toJson(DateTime(2026, 7, 2));
+    expect(j['serving_size'], 30);
+    expect(j['serving_unit'], 'g');
+    expect((j['macros_per_serving'] as Map)['protein_g'], 6);
+    expect((j['macros_per_100g'] as Map)['protein_g'], closeTo(20, 1e-6));
+  });
+
+  test('a non-gram serving unit does not emit a derived per-100 g', () {
+    final PantryItem it = PantryItem(
+      id: 's2',
+      name: 'protein cookies',
+      total: 12,
+      remaining: 12,
+      unit: kUnitCount,
+      price: 6,
+      macros: const Macros(proteinG: 10, calories: 150),
+      servingSize: 1,
+      servingUnit: 'cookie',
+      dateAdded: '2026-07-02',
+      lastPrice: 6,
+    );
+    final Map<String, dynamic> j = it.toJson(DateTime(2026, 7, 2));
+    expect(j['serving_unit'], 'cookie');
+    expect(j.containsKey('macros_per_serving'), isTrue);
+    expect(j.containsKey('macros_per_100g'), isFalse);
+  });
+
+  test('legacy macros_per_100g migrates to a 100 g serving', () {
+    final PantryItem it = PantryItem.fromJson(<String, dynamic>{
+      'id': 'old',
+      'name': 'rice',
+      'total_weight_g': 900,
+      'remaining_weight_g': 900,
+      'price': 2.0,
+      'macros_per_100g': <String, dynamic>{'protein_g': 7, 'calories': 360},
+      'date_added': '2026-07-02',
+      'last_price': 2.0,
+    });
+    expect(it.servingSize, 100);
+    expect(it.servingUnit, 'g');
+    expect(it.macros.proteinG, 7);
   });
 }

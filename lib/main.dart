@@ -173,6 +173,8 @@ class _HomePageState extends State<HomePage> {
           unit: item.unit,
           lastPrice: item.price,
           macros: item.macros,
+          servingSize: item.servingSize,
+          servingUnit: item.servingUnit,
           lastTotal: item.total,
         ));
       });
@@ -215,11 +217,18 @@ class _HomePageState extends State<HomePage> {
       _startAdd(prefill: AddPrefill(barcode: code));
       return;
     }
+    // Open Food Facts gives per-100 g. Convert to per-serving using the
+    // product's serving grams when known; otherwise present a 100 g serving.
+    final double sg = (info.servingGrams != null && info.servingGrams! > 0)
+        ? info.servingGrams!
+        : 100;
     _startAdd(
       prefill: AddPrefill(
         name: info.name,
         barcode: info.barcode ?? code,
-        macros: info.macrosPer100g,
+        macros: info.macrosPer100g.scale(sg / 100),
+        servingSize: sg,
+        servingUnit: 'g',
         total: info.packGrams,
       ),
     );
@@ -256,23 +265,20 @@ class _HomePageState extends State<HomePage> {
       _startAdd();
       return;
     }
-    final per100 = parse.toPer100g();
+    // US labels are already per serving — use the numbers as-is.
+    final double? sg = parse.servingGrams;
     _startAdd(
       prefill: AddPrefill(
-        macros: per100 == null
-            ? Macros(
-                proteinG: parse.protein ?? 0,
-                calories: parse.calories ?? 0,
-                carbsG: parse.carbs ?? 0,
-                fatG: parse.fat ?? 0)
-            : Macros(
-                proteinG: per100.proteinG ?? 0,
-                calories: per100.calories ?? 0,
-                carbsG: per100.carbsG ?? 0,
-                fatG: per100.fatG ?? 0),
-        macrosNote: per100 == null
-            ? 'Label was per serving and serving grams were not read — these '
-                'numbers are per serving; correct them to per 100 g.'
+        macros: Macros(
+          proteinG: parse.protein ?? 0,
+          calories: parse.calories ?? 0,
+          carbsG: parse.carbs ?? 0,
+          fatG: parse.fat ?? 0,
+        ),
+        servingSize: (sg != null && sg > 0) ? sg : 0,
+        servingUnit: 'g',
+        macrosNote: (sg == null || sg <= 0)
+            ? 'Read the macros per serving — set the serving size to match.'
             : null,
       ),
     );
@@ -285,6 +291,8 @@ class _HomePageState extends State<HomePage> {
         barcode: q.barcode,
         unit: q.unit,
         macros: q.macros,
+        servingSize: q.servingSize,
+        servingUnit: q.servingUnit,
         price: q.lastPrice,
         total: q.lastTotal,
       ),
@@ -675,6 +683,19 @@ class _ItemSheetState extends State<ItemSheet> {
         ),
         if (!m.isEmpty) ...[
           const SizedBox(height: 12),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+                it.servingLabel.isEmpty
+                    ? 'PER SERVING'
+                    : 'PER SERVING · ${it.servingLabel}',
+                style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey[600],
+                    letterSpacing: 1,
+                    fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(height: 6),
           Row(children: [
             _macro('P', m.proteinG),
             _macro('Cal', m.calories),
@@ -795,7 +816,9 @@ class AddPrefill {
   final String? name;
   final String? barcode;
   final String? unit; // 'g' | 'count'
-  final Macros? macros;
+  final Macros? macros; // per serving
+  final double? servingSize;
+  final String? servingUnit;
   final double? total;
   final double? price;
   final String? macrosNote;
@@ -805,6 +828,8 @@ class AddPrefill {
     this.barcode,
     this.unit,
     this.macros,
+    this.servingSize,
+    this.servingUnit,
     this.total,
     this.price,
     this.macrosNote,
@@ -829,9 +854,12 @@ class _AddItemPageState extends State<AddItemPage> {
   late final TextEditingController _fat;
   late final TextEditingController _total;
   late final TextEditingController _price;
+  late final TextEditingController _serving;
+  late final TextEditingController _customUnit;
   String? _expiration;
   String? _note;
   late String _unit; // 'g' | 'count'
+  late String _servingUnit; // one of kServingUnits, or '__custom__'
 
   @override
   void initState() {
@@ -849,6 +877,17 @@ class _AddItemPageState extends State<AddItemPage> {
     _total =
         TextEditingController(text: _pf(e?.total ?? p?.total ?? 0));
     _price = TextEditingController(text: _pf(e?.price ?? p?.price ?? 0));
+    _serving = TextEditingController(
+        text: _pf(e?.servingSize ?? p?.servingSize ?? 0));
+    // Serving unit: use the preset if it matches one, else treat as custom.
+    final String su = e?.servingUnit ?? p?.servingUnit ?? 'g';
+    if (kServingUnits.contains(su)) {
+      _servingUnit = su;
+      _customUnit = TextEditingController();
+    } else {
+      _servingUnit = '__custom__';
+      _customUnit = TextEditingController(text: su);
+    }
     _expiration = e?.expirationDate;
     _note = p?.macrosNote;
   }
@@ -858,7 +897,8 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   void dispose() {
     for (final TextEditingController c in <TextEditingController>[
-      _name, _barcode, _protein, _calories, _carbs, _fat, _total, _price
+      _name, _barcode, _protein, _calories, _carbs, _fat, _total, _price,
+      _serving, _customUnit
     ]) {
       c.dispose();
     }
@@ -867,6 +907,11 @@ class _AddItemPageState extends State<AddItemPage> {
 
   double _d(TextEditingController c) => double.tryParse(c.text.trim()) ?? 0;
   bool get _isCount => _unit == kUnitCount;
+
+  /// The resolved serving unit string (preset or the typed custom value).
+  String get _resolvedServingUnit => _servingUnit == '__custom__'
+      ? (_customUnit.text.trim().isEmpty ? 'serving' : _customUnit.text.trim())
+      : _servingUnit;
 
   void _save() {
     final String name = _name.text.trim();
@@ -896,6 +941,8 @@ class _AddItemPageState extends State<AddItemPage> {
           : (e.remaining > total ? total : e.remaining),
       price: _d(_price),
       macros: macros,
+      servingSize: _d(_serving),
+      servingUnit: _resolvedServingUnit,
       expirationDate: _expiration,
       dateAdded: e?.dateAdded ?? _todayStr(),
       lastPrice: _d(_price),
@@ -946,9 +993,22 @@ class _AddItemPageState extends State<AddItemPage> {
             ),
           ),
           const SizedBox(height: 16),
-          _sectionLabel(_isCount
-              ? 'MACROS — per item (optional)'
-              : 'MACROS — per 100 g'),
+          _sectionLabel('SERVING SIZE'),
+          Row(children: [
+            Expanded(flex: 2, child: _numField('Size', _serving)),
+            const SizedBox(width: 10),
+            Expanded(flex: 3, child: _servingUnitDropdown()),
+          ]),
+          if (_servingUnit == '__custom__') ...[
+            const SizedBox(height: 10),
+            TextField(
+              controller: _customUnit,
+              onChanged: (_) => setState(() {}),
+              decoration: _dec('e.g. cookie, scoop, slice', label: 'Custom unit'),
+            ),
+          ],
+          const SizedBox(height: 16),
+          _sectionLabel('MACROS — per serving'),
           Row(children: [
             Expanded(child: _numField('Protein g', _protein)),
             const SizedBox(width: 10),
@@ -1086,6 +1146,23 @@ class _AddItemPageState extends State<AddItemPage> {
       decoration: _dec(label, label: label),
     );
   }
+
+  Widget _servingUnitDropdown() {
+    return DropdownButtonFormField<String>(
+      initialValue: _servingUnit,
+      isExpanded: true,
+      dropdownColor: kCard,
+      decoration: _dec('Unit', label: 'Unit'),
+      items: <DropdownMenuItem<String>>[
+        for (final String u in kServingUnits)
+          DropdownMenuItem<String>(value: u, child: Text(u)),
+        const DropdownMenuItem<String>(
+            value: '__custom__', child: Text('custom…')),
+      ],
+      onChanged: (String? v) =>
+          setState(() => _servingUnit = v ?? 'g'),
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1132,7 +1209,7 @@ class QuickAddTab extends StatelessWidget {
         final QuickAddItem q = quick[i];
         final String macroNote = q.macros.isEmpty
             ? ''
-            : '  ·  ${_fmt(q.macros.proteinG)}g protein/${q.isCount ? "item" : "100g"}';
+            : '  ·  ${_fmt(q.macros.proteinG)}g protein/serving';
         return Container(
           margin: const EdgeInsets.only(bottom: 10),
           decoration: BoxDecoration(
