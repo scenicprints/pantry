@@ -26,6 +26,12 @@ dependencies:
   image_picker: ^1.1.2                     # capture a Nutrition Facts photo
   google_mlkit_text_recognition: ^0.13.0   # on-device OCR of the label
 
+  # AI Chef
+  flutter_secure_storage: ^9.2.2   # store the Claude API key on-device (encrypted)
+  google_fonts: ^6.2.1             # Fraunces / Inter / IBM Plex Mono (editorial UI)
+  wakelock_plus: ^1.2.8            # keep the screen awake in Cooking Mode
+  vibration: ^3.1.0               # buzz when a step timer hits zero
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

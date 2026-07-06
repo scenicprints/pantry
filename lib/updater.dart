@@ -4,6 +4,8 @@ import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:ota_update/ota_update.dart';
 
+import 'theme.dart';
+
 // ═══════════════════════════════════════════════════════════════════════
 // IN-APP OTA UPDATER — checks the latest GitHub Release for this repo,
 // compares versions, and downloads + installs the newer APK. The code repo
@@ -206,19 +208,19 @@ class _UpdateCardState extends State<UpdateCard> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-          color: const Color(0xFF1A1A1A),
+          color: kCard,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0xFF232323))),
+          border: Border.all(color: kBorder)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           Text('APP UPDATES',
               style: TextStyle(
                   fontSize: 11,
-                  color: Colors.grey[600],
+                  color: kMuted,
                   letterSpacing: 1,
                   fontWeight: FontWeight.w600)),
           Text(_current.isEmpty ? '' : 'v$_current',
-              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+              style: TextStyle(fontSize: 11, color: kMuted)),
         ]),
         const SizedBox(height: 12),
         _body(),
@@ -237,24 +239,24 @@ class _UpdateCardState extends State<UpdateCard> {
               child: CircularProgressIndicator(strokeWidth: 2, color: accent)),
           const SizedBox(width: 12),
           Text('Checking for updates…',
-              style: TextStyle(fontSize: 13, color: Colors.grey[400])),
+              style: TextStyle(fontSize: 13, color: kMuted)),
         ]);
 
       case _State.downloading:
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text('Downloading update… $_progress%',
-              style: TextStyle(fontSize: 13, color: Colors.grey[300])),
+              style: TextStyle(fontSize: 13, color: kInk)),
           const SizedBox(height: 8),
           ClipRRect(
               borderRadius: BorderRadius.circular(2),
               child: LinearProgressIndicator(
                   value: _progress / 100,
                   minHeight: 4,
-                  backgroundColor: const Color(0xFF111111),
+                  backgroundColor: kInset,
                   valueColor: AlwaysStoppedAnimation<Color>(accent))),
           const SizedBox(height: 8),
           Text("The installer will open automatically when it's ready.",
-              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+              style: TextStyle(fontSize: 11, color: kMuted)),
         ]);
 
       case _State.available:
@@ -268,13 +270,13 @@ class _UpdateCardState extends State<UpdateCard> {
             Text("WHAT'S NEW",
                 style: TextStyle(
                     fontSize: 10,
-                    color: Colors.grey[600],
+                    color: kMuted,
                     letterSpacing: 1,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 4),
             Text(r.notes,
                 style: TextStyle(
-                    fontSize: 13, color: Colors.grey[300], height: 1.5)),
+                    fontSize: 13, color: kInk, height: 1.5)),
           ],
           const SizedBox(height: 14),
           SizedBox(
@@ -283,7 +285,7 @@ class _UpdateCardState extends State<UpdateCard> {
                   onPressed: _install,
                   style: ElevatedButton.styleFrom(
                       backgroundColor: accent,
-                      foregroundColor: Colors.black,
+                      foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10))),
@@ -298,14 +300,14 @@ class _UpdateCardState extends State<UpdateCard> {
           const SizedBox(width: 10),
           Expanded(
               child: Text("You're on the latest version.",
-                  style: TextStyle(fontSize: 13, color: Colors.grey[300]))),
+                  style: TextStyle(fontSize: 13, color: kInk))),
           _checkButton('Re-check'),
         ]);
 
       case _State.error:
         return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(_msg,
-              style: const TextStyle(fontSize: 13, color: Color(0xFFCC8855))),
+              style: const TextStyle(fontSize: 13, color: kWarn)),
           const SizedBox(height: 10),
           _checkButton('Retry'),
         ]);
@@ -314,7 +316,7 @@ class _UpdateCardState extends State<UpdateCard> {
         return Row(children: [
           Expanded(
               child: Text('Check GitHub for a newer build.',
-                  style: TextStyle(fontSize: 13, color: Colors.grey[500]))),
+                  style: TextStyle(fontSize: 13, color: kMuted))),
           _checkButton('Check'),
         ]);
     }
