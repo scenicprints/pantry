@@ -9,6 +9,7 @@ import 'food_lookup.dart';
 import 'github_sync.dart';
 import 'label_parser.dart';
 import 'models.dart';
+import 'notifications.dart';
 import 'storage.dart';
 import 'theme.dart';
 import 'updater.dart';
@@ -22,6 +23,7 @@ import 'updater.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocalCache.init();
+  await Notifications.init();
   runApp(const PantryApp());
 }
 
@@ -848,7 +850,8 @@ class _AddItemPageState extends State<AddItemPage> {
   late final TextEditingController _calories;
   late final TextEditingController _carbs;
   late final TextEditingController _fat;
-  late final TextEditingController _total;
+  late final TextEditingController _servings; // servings per container
+  late final TextEditingController _available; // on-hand amount (remaining)
   late final TextEditingController _price;
   late final TextEditingController _serving;
   late final TextEditingController _customUnit;
@@ -870,11 +873,15 @@ class _AddItemPageState extends State<AddItemPage> {
     _calories = TextEditingController(text: _pf(m.calories));
     _carbs = TextEditingController(text: _pf(m.carbsG));
     _fat = TextEditingController(text: _pf(m.fatG));
-    _total =
-        TextEditingController(text: _pf(e?.total ?? p?.total ?? 0));
+    // Servings per container is derived from total ÷ serving size (both are
+    // known on edit / from a barcode); blank when we can't derive it.
+    final double eTotal = e?.total ?? p?.total ?? 0;
+    final double sSize = e?.servingSize ?? p?.servingSize ?? 0;
+    _servings = TextEditingController(
+        text: (eTotal > 0 && sSize > 0) ? _fmt(eTotal / sSize) : '');
+    _available = TextEditingController(text: e != null ? _pf(e.remaining) : '');
     _price = TextEditingController(text: _pf(e?.price ?? p?.price ?? 0));
-    _serving = TextEditingController(
-        text: _pf(e?.servingSize ?? p?.servingSize ?? 0));
+    _serving = TextEditingController(text: _pf(sSize));
     // Serving unit: use the preset if it matches one, else treat as custom.
     final String su = e?.servingUnit ?? p?.servingUnit ?? 'g';
     if (kServingUnits.contains(su)) {
@@ -893,8 +900,8 @@ class _AddItemPageState extends State<AddItemPage> {
   @override
   void dispose() {
     for (final TextEditingController c in <TextEditingController>[
-      _name, _barcode, _protein, _calories, _carbs, _fat, _total, _price,
-      _serving, _customUnit
+      _name, _barcode, _protein, _calories, _carbs, _fat, _servings, _available,
+      _price, _serving, _customUnit
     ]) {
       c.dispose();
     }
@@ -903,6 +910,18 @@ class _AddItemPageState extends State<AddItemPage> {
 
   double _d(TextEditingController c) => double.tryParse(c.text.trim()) ?? 0;
   bool get _isCount => _unit == kUnitCount;
+
+  /// Total = serving size × servings per container. If servings is blank,
+  /// one serving is assumed. With no serving size, the total is just whatever
+  /// is on hand.
+  double get _computedTotal {
+    final double s = _d(_serving);
+    final double n = _d(_servings);
+    if (s > 0) {
+      return n > 0 ? s * n : s;
+    }
+    return _d(_available);
+  }
 
   /// The resolved serving unit string (preset or the typed custom value).
   String get _resolvedServingUnit => _servingUnit == '__custom__'
@@ -917,7 +936,11 @@ class _AddItemPageState extends State<AddItemPage> {
           content: Text('Give the item a name.')));
       return;
     }
-    final double total = _d(_total);
+    final double total = _computedTotal;
+    // Available (on-hand) drives remaining; defaults to a full container.
+    final double avail = _d(_available);
+    final double remaining =
+        (avail > 0 ? avail : total).clamp(0, total).toDouble();
     final Macros macros = Macros(
       proteinG: _d(_protein),
       calories: _d(_calories),
@@ -932,9 +955,7 @@ class _AddItemPageState extends State<AddItemPage> {
       barcode: _barcode.text.trim().isEmpty ? null : _barcode.text.trim(),
       unit: _unit,
       total: total,
-      remaining: e == null
-          ? total
-          : (e.remaining > total ? total : e.remaining),
+      remaining: remaining,
       price: _d(_price),
       macros: macros,
       servingSize: _d(_serving),
@@ -989,9 +1010,9 @@ class _AddItemPageState extends State<AddItemPage> {
             ),
           ),
           const SizedBox(height: 16),
-          _sectionLabel('SERVING SIZE'),
+          _sectionLabel('SERVING SIZE & COUNT'),
           Row(children: [
-            Expanded(flex: 2, child: _numField('Size', _serving)),
+            Expanded(flex: 2, child: _numField('Serving size', _serving)),
             const SizedBox(width: 10),
             Expanded(flex: 3, child: _servingUnitDropdown()),
           ]),
@@ -1003,6 +1024,8 @@ class _AddItemPageState extends State<AddItemPage> {
               decoration: _dec('e.g. cookie, scoop, slice', label: 'Custom unit'),
             ),
           ],
+          const SizedBox(height: 10),
+          _numField('Servings per container', _servings),
           const SizedBox(height: 16),
           _sectionLabel('MACROS — per serving'),
           Row(children: [
@@ -1022,10 +1045,13 @@ class _AddItemPageState extends State<AddItemPage> {
           ],
           const SizedBox(height: 16),
           _sectionLabel('AMOUNT & COST'),
+          _totalDisplay(u),
+          const SizedBox(height: 10),
           Row(children: [
             Expanded(
                 child: _numField(
-                    _isCount ? 'Total count' : 'Total weight g', _total)),
+                    _isCount ? 'Available now (ct)' : 'Available now (g)',
+                    _available)),
             const SizedBox(width: 10),
             Expanded(child: _numField('Price \$', _price)),
           ]),
@@ -1055,8 +1081,32 @@ class _AddItemPageState extends State<AddItemPage> {
     );
   }
 
+  /// Auto-calculated total (serving size × servings), shown live.
+  Widget _totalDisplay(String u) {
+    final double total = _computedTotal;
+    final double s = _d(_serving);
+    final double n = _d(_servings);
+    final String detail = (s > 0 && n > 0)
+        ? '${_fmt(s)} × ${_fmt(n)}'
+        : (s > 0 ? '1 serving' : 'from Available');
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+          color: kInset, borderRadius: BorderRadius.circular(10)),
+      child: Row(children: [
+        Text('Total', style: labelCaps()),
+        const Spacer(),
+        Text('${_fmt(total)} $u',
+            style: mono(size: 16, weight: FontWeight.w700, color: kInk)),
+        const SizedBox(width: 8),
+        Text('($detail)', style: TextStyle(fontSize: 11, color: kMuted)),
+      ]),
+    );
+  }
+
   Widget _pricePerPreview(String u) {
-    final double total = _d(_total);
+    final double total = _computedTotal;
     final double price = _d(_price);
     final double ppg = total > 0 ? price / total : 0;
     return Align(
@@ -1065,7 +1115,7 @@ class _AddItemPageState extends State<AddItemPage> {
           total > 0
               ? 'Price per ${_isCount ? "item" : "gram"}: '
                   '\$${ppg.toStringAsFixed(_isCount ? 2 : 4)}/$u'
-              : 'Enter total ${_isCount ? "count" : "weight"} to compute price per ${_isCount ? "item" : "gram"}.',
+              : 'Set serving size (and servings) or Available to compute price.',
           style: TextStyle(fontSize: 12, color: kMuted)),
     );
   }
