@@ -156,6 +156,47 @@ void main() {
     expect(j.containsKey('macros_per_100g'), isFalse);
   });
 
+  test('spice item: own category, untracked, round-trips', () {
+    final PantryItem salt = PantryItem(
+      id: 's',
+      name: 'cumin',
+      total: 0,
+      remaining: 0,
+      price: 0,
+      macros: const Macros(),
+      dateAdded: '2026-07-06',
+      lastPrice: 0,
+      spice: true,
+    );
+    expect(salt.category, 'Spices');
+    expect(salt.untracked, isTrue);
+    final Map<String, dynamic> j = salt.toJson(DateTime(2026, 7, 6));
+    expect(j['category'], 'Spices');
+    expect(j['spice'], true);
+    final PantryItem back = PantryItem.fromJson(j);
+    expect(back.spice, isTrue);
+    expect(back.category, 'Spices');
+  });
+
+  test('quantity-unknown item is untracked in the Pantry category', () {
+    final PantryItem it = PantryItem(
+      id: 'q',
+      name: 'leftover rice',
+      total: 0,
+      remaining: 0,
+      price: 0,
+      macros: const Macros(),
+      dateAdded: '2026-07-06',
+      lastPrice: 0,
+      quantityUnknown: true,
+    );
+    expect(it.untracked, isTrue);
+    expect(it.category, 'Pantry');
+    final PantryItem back = PantryItem.fromJson(it.toJson(DateTime(2026, 7, 6)));
+    expect(back.quantityUnknown, isTrue);
+    expect(back.spice, isFalse);
+  });
+
   test('legacy macros_per_100g migrates to a 100 g serving', () {
     final PantryItem it = PantryItem.fromJson(<String, dynamic>{
       'id': 'old',

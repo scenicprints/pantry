@@ -261,10 +261,17 @@ new buys, and storage/pro tips.''';
   /// One line per in-stock item for the prompt.
   static String formatPantry(List<PantryItem> pantry) {
     final DateTime now = DateTime.now();
+    // Include tracked items with stock left, plus spices / on-hand items
+    // (their amount isn't tracked but they ARE available).
     final List<PantryItem> live = pantry
-        .where((PantryItem i) => !i.deleted && i.remaining > 0)
+        .where((PantryItem i) =>
+            !i.deleted && (i.remaining > 0 || i.untracked))
         .toList()
       ..sort((PantryItem a, PantryItem b) {
+        // Spices last; expiring first; then alphabetical.
+        if (a.spice != b.spice) {
+          return a.spice ? 1 : -1;
+        }
         final bool ea = a.isExpiringSoon(now), eb = b.isExpiringSoon(now);
         if (ea != eb) {
           return ea ? -1 : 1;
@@ -276,6 +283,10 @@ new buys, and storage/pro tips.''';
     }
     final StringBuffer sb = StringBuffer();
     for (final PantryItem it in live) {
+      if (it.untracked) {
+        sb.writeln('- ${it.name}: ${it.spice ? '(spice — always on hand)' : '(on hand, amount unknown)'}');
+        continue;
+      }
       final String amt = it.isCount
           ? '${_fmt(it.remaining)} ct'
           : '${_fmt(it.remaining)} g';
@@ -332,6 +343,9 @@ THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
   but pantry items.
 - When the pantry is nearly empty, it is expected and correct for options to
   need several new buys — be honest about it, don't pretend items are on hand.
+- Items shown as "(spice — always on hand)" or "(on hand, amount unknown)" ARE
+  available — never list them as new buys. Just don't rely on a specific gram
+  amount for them; assume enough.
 - In recipes, append " (new buy)" to any ingredient name that is not in the
   pantry.
 

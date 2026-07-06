@@ -482,32 +482,79 @@ class _HomePageState extends State<HomePage> {
 // PANTRY TAB
 // ═══════════════════════════════════════════════════════════════════════
 
-class PantryTab extends StatelessWidget {
+class PantryTab extends StatefulWidget {
   final List<PantryItem> items;
   final void Function(PantryItem) onTapItem;
 
   const PantryTab({super.key, required this.items, required this.onTapItem});
 
   @override
+  State<PantryTab> createState() => _PantryTabState();
+}
+
+class _PantryTabState extends State<PantryTab> {
+  String _filter = 'All';
+
+  @override
   Widget build(BuildContext context) {
     final DateTime now = DateTime.now();
-    final List<PantryItem> sorted = <PantryItem>[...items]..sort((a, b) {
+    if (widget.items.isEmpty) {
+      return _empty();
+    }
+    final bool hasSpices = widget.items.any((PantryItem i) => i.spice);
+    final List<PantryItem> visible = widget.items
+        .where((PantryItem i) => _filter == 'All' || i.category == _filter)
+        .toList()
+      ..sort((PantryItem a, PantryItem b) {
         final bool ea = a.isExpiringSoon(now), eb = b.isExpiringSoon(now);
         if (ea != eb) {
           return ea ? -1 : 1;
         }
         return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       });
-
-    if (sorted.isEmpty) {
-      return _empty();
-    }
-    // Bottom padding clears the FAB + the phone's gesture inset.
     final double bottomPad = 96 + MediaQuery.of(context).viewPadding.bottom;
-    return ListView.builder(
-      padding: EdgeInsets.fromLTRB(12, 12, 12, bottomPad),
-      itemCount: sorted.length,
-      itemBuilder: (_, int i) => _row(context, sorted[i], now),
+    return Column(children: [
+      if (hasSpices) _filterBar(),
+      Expanded(
+        child: visible.isEmpty
+            ? Center(
+                child: Text('Nothing in $_filter yet.',
+                    style: TextStyle(color: kMuted)))
+            : ListView.builder(
+                padding: EdgeInsets.fromLTRB(12, hasSpices ? 2 : 12, 12, bottomPad),
+                itemCount: visible.length,
+                itemBuilder: (_, int i) => _row(context, visible[i], now),
+              ),
+      ),
+    ]);
+  }
+
+  Widget _filterBar() {
+    const List<String> cats = <String>['All', 'Pantry', 'Spices'];
+    return SizedBox(
+      height: 46,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        children: [
+          for (final String c in cats)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: ChoiceChip(
+                label: Text(c),
+                selected: _filter == c,
+                onSelected: (_) => setState(() => _filter = c),
+                showCheckmark: false,
+                backgroundColor: kCard,
+                selectedColor: kAccent.withValues(alpha: 0.18),
+                side: BorderSide(color: _filter == c ? kAccent : kBorder),
+                labelStyle: TextStyle(
+                    color: _filter == c ? kAccent : kInk,
+                    fontWeight: FontWeight.w600),
+              ),
+            ),
+        ],
+      ),
     );
   }
 
@@ -523,13 +570,27 @@ class PantryTab extends StatelessWidget {
         ]),
       );
 
+  Widget _badge(String text, Color color) => Container(
+        margin: const EdgeInsets.only(left: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.15),
+            borderRadius: BorderRadius.circular(20)),
+        child: Text(text,
+            style: TextStyle(
+                fontSize: 9,
+                color: color,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.6)),
+      );
+
   Widget _row(BuildContext context, PantryItem it, DateTime now) {
     final bool expiring = it.isExpiringSoon(now);
     final double pct =
         it.total > 0 ? (it.remaining / it.total).clamp(0, 1).toDouble() : 0;
     final String u = it.unitLabel;
     return GestureDetector(
-      onTap: () => onTapItem(it),
+      onTap: () => widget.onTapItem(it),
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.all(14),
@@ -545,54 +606,44 @@ class PantryTab extends StatelessWidget {
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600)),
             ),
-            if (it.isCount)
-              Container(
-                margin: const EdgeInsets.only(right: 6),
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                decoration: BoxDecoration(
-                    color: kInset, borderRadius: BorderRadius.circular(20)),
-                child: Text('COUNT',
-                    style: TextStyle(
-                        fontSize: 9,
-                        color: kMuted,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.6)),
-              ),
-            if (expiring)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                    color: kWarn.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(20)),
-                child: const Text('EXPIRING',
-                    style: TextStyle(
-                        fontSize: 9,
-                        color: kWarn,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.6)),
-              ),
+            if (it.spice)
+              _badge('SPICE', kOlive)
+            else if (it.quantityUnknown)
+              _badge('ON HAND', kOlive)
+            else if (it.isCount)
+              _badge('COUNT', kMuted),
+            if (expiring) _badge('EXPIRING', kWarn),
           ]),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(3),
-            child: LinearProgressIndicator(
-              value: pct,
-              minHeight: 5,
-              backgroundColor: kInset,
-              valueColor:
-                  AlwaysStoppedAnimation<Color>(expiring ? kWarn : kAccent),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Row(children: [
-            Text('${_fmt(it.remaining)} / ${_fmt(it.total)} $u',
-                style: TextStyle(fontSize: 12, color: kMuted)),
-            const Spacer(),
+          if (it.untracked) ...[
+            const SizedBox(height: 8),
             Text(
-                '\$${it.price.toStringAsFixed(2)}  ·  '
-                '\$${it.pricePer.toStringAsFixed(it.isCount ? 2 : 4)}/$u',
-                style: TextStyle(fontSize: 12, color: kMuted)),
-          ]),
+                it.spice
+                    ? 'Spice · always on hand'
+                    : 'On hand · amount not tracked',
+                style: TextStyle(fontSize: 12, color: kOlive)),
+          ] else ...[
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(3),
+              child: LinearProgressIndicator(
+                value: pct,
+                minHeight: 5,
+                backgroundColor: kInset,
+                valueColor:
+                    AlwaysStoppedAnimation<Color>(expiring ? kWarn : kAccent),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(children: [
+              Text('${_fmt(it.remaining)} / ${_fmt(it.total)} $u',
+                  style: TextStyle(fontSize: 12, color: kMuted)),
+              const Spacer(),
+              Text(
+                  '\$${it.price.toStringAsFixed(2)}  ·  '
+                  '\$${it.pricePer.toStringAsFixed(it.isCount ? 2 : 4)}/$u',
+                  style: TextStyle(fontSize: 12, color: kMuted)),
+            ]),
+          ],
           if (it.expirationDate != null && it.expirationDate!.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('Expires ${it.expirationDate}',
@@ -676,7 +727,12 @@ class _ItemSheetState extends State<ItemSheet> {
         const SizedBox(height: 4),
         Align(
           alignment: Alignment.centerLeft,
-          child: Text('${_fmt(it.remaining)} $u left of ${_fmt(it.total)} $u',
+          child: Text(
+              it.untracked
+                  ? (it.spice
+                      ? 'Spice · always on hand'
+                      : 'On hand · amount not tracked')
+                  : '${_fmt(it.remaining)} $u left of ${_fmt(it.total)} $u',
               style: TextStyle(color: kMuted, fontSize: 13)),
         ),
         if (!m.isEmpty) ...[
@@ -701,6 +757,7 @@ class _ItemSheetState extends State<ItemSheet> {
             _macro('F', m.fatG),
           ]),
         ],
+        if (!it.untracked) ...[
         const SizedBox(height: 18),
         Align(
           alignment: Alignment.centerLeft,
@@ -753,6 +810,7 @@ class _ItemSheetState extends State<ItemSheet> {
         const SizedBox(height: 6),
         Text('Use = cooked/consumed.  Add = bought more.',
             style: TextStyle(fontSize: 11, color: kMuted)),
+        ],
         const SizedBox(height: 16),
         Row(children: [
           Expanded(
@@ -859,6 +917,11 @@ class _AddItemPageState extends State<AddItemPage> {
   String? _note;
   late String _unit; // 'g' | 'count'
   late String _servingUnit; // one of kServingUnits, or '__custom__'
+  bool _spice = false;
+  bool _quantityUnknown = false;
+
+  /// Amount/cost aren't tracked for spices or quantity-unknown items.
+  bool get _untracked => _spice || _quantityUnknown;
 
   @override
   void initState() {
@@ -866,6 +929,8 @@ class _AddItemPageState extends State<AddItemPage> {
     final PantryItem? e = widget.existing;
     final AddPrefill? p = widget.prefill;
     final Macros m = e?.macros ?? p?.macros ?? const Macros();
+    _spice = e?.spice ?? false;
+    _quantityUnknown = e?.quantityUnknown ?? false;
     _unit = e?.unit ?? p?.unit ?? kUnitGrams;
     _name = TextEditingController(text: e?.name ?? p?.name ?? '');
     _barcode = TextEditingController(text: e?.barcode ?? p?.barcode ?? '');
@@ -936,17 +1001,21 @@ class _AddItemPageState extends State<AddItemPage> {
           content: Text('Give the item a name.')));
       return;
     }
-    final double total = _computedTotal;
-    // Available (on-hand) drives remaining; defaults to a full container.
+    // Spices / quantity-unknown items don't track amount or cost.
+    final double total = _untracked ? 0 : _computedTotal;
     final double avail = _d(_available);
-    final double remaining =
-        (avail > 0 ? avail : total).clamp(0, total).toDouble();
-    final Macros macros = Macros(
-      proteinG: _d(_protein),
-      calories: _d(_calories),
-      carbsG: _d(_carbs),
-      fatG: _d(_fat),
-    );
+    final double remaining = _untracked
+        ? 0
+        : (avail > 0 ? avail : total).clamp(0, total).toDouble();
+    final double price = _untracked ? 0 : _d(_price);
+    final Macros macros = _untracked
+        ? const Macros()
+        : Macros(
+            proteinG: _d(_protein),
+            calories: _d(_calories),
+            carbsG: _d(_carbs),
+            fatG: _d(_fat),
+          );
     final int nowMs = DateTime.now().millisecondsSinceEpoch;
     final PantryItem? e = widget.existing;
     final PantryItem item = PantryItem(
@@ -956,14 +1025,16 @@ class _AddItemPageState extends State<AddItemPage> {
       unit: _unit,
       total: total,
       remaining: remaining,
-      price: _d(_price),
+      price: price,
       macros: macros,
-      servingSize: _d(_serving),
+      servingSize: _untracked ? 0 : _d(_serving),
       servingUnit: _resolvedServingUnit,
       expirationDate: _expiration,
       dateAdded: e?.dateAdded ?? _todayStr(),
-      lastPrice: _d(_price),
+      lastPrice: price,
       updatedAtMs: nowMs,
+      spice: _spice,
+      quantityUnknown: _quantityUnknown,
     );
     Navigator.pop(context, item);
   }
@@ -984,6 +1055,9 @@ class _AddItemPageState extends State<AddItemPage> {
         children: [
           _field('Name', _name, hint: 'e.g. ground turkey / eggs'),
           _field('Barcode (optional)', _barcode, hint: 'digits'),
+          const SizedBox(height: 8),
+          _typeToggles(),
+          if (!_untracked) ...[
           const SizedBox(height: 12),
           _sectionLabel('TRACK BY'),
           SegmentedButton<String>(
@@ -1057,6 +1131,7 @@ class _AddItemPageState extends State<AddItemPage> {
           ]),
           const SizedBox(height: 6),
           _pricePerPreview(u),
+          ],
           const SizedBox(height: 16),
           _sectionLabel('EXPIRATION (optional)'),
           _expirationPickerRow(),
@@ -1172,6 +1247,51 @@ class _AddItemPageState extends State<AddItemPage> {
                 letterSpacing: 1,
                 fontWeight: FontWeight.w600)),
       );
+
+  Widget _typeToggles() {
+    return Column(children: [
+      _toggleRow(
+          'I have it — amount & cost unknown',
+          'For stuff you bought before tracking. The chef knows you have it.',
+          _quantityUnknown,
+          (bool v) => setState(() => _quantityUnknown = v)),
+      const SizedBox(height: 8),
+      _toggleRow(
+          'Spice',
+          'Its own pantry category. Never-ending, no cost to track.',
+          _spice,
+          (bool v) => setState(() => _spice = v)),
+    ]);
+  }
+
+  Widget _toggleRow(
+      String title, String sub, bool value, ValueChanged<bool> onChanged) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      decoration: BoxDecoration(
+          color: kCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: kBorder)),
+      child: Row(children: [
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const SizedBox(height: 8),
+                Text(title,
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w600, fontSize: 14)),
+                Text(sub, style: TextStyle(fontSize: 11.5, color: kMuted)),
+                const SizedBox(height: 8),
+              ]),
+        ),
+        Switch(
+            value: value,
+            activeTrackColor: kAccent,
+            onChanged: onChanged),
+      ]),
+    );
+  }
 
   Widget _field(String label, TextEditingController c, {String? hint}) {
     return Padding(

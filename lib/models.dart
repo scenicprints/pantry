@@ -103,6 +103,8 @@ class PantryItem {
   double lastPrice;
   int updatedAtMs;
   bool deleted;
+  bool spice; // a spice: own category, no weight/cost, effectively unlimited
+  bool quantityUnknown; // have it, but amount + cost aren't tracked
 
   PantryItem({
     required this.id,
@@ -120,9 +122,18 @@ class PantryItem {
     required this.lastPrice,
     this.updatedAtMs = 0,
     this.deleted = false,
+    this.spice = false,
+    this.quantityUnknown = false,
   });
 
   bool get isCount => unit == kUnitCount;
+
+  /// Pantry category. Spices get their own; everything else is "Pantry".
+  String get category => spice ? 'Spices' : 'Pantry';
+
+  /// True when the amount/cost isn't tracked (spice or quantity-unknown) —
+  /// the chef treats these as available without relying on a weight.
+  bool get untracked => spice || quantityUnknown;
 
   /// price ÷ total — price-per-gram (weight) or price-per-unit (count).
   double get pricePer => total > 0 ? price / total : 0;
@@ -161,6 +172,9 @@ class PantryItem {
       'date_added': dateAdded,
       'last_price': _round2(lastPrice),
       'updated_at_ms': updatedAtMs,
+      'category': category,
+      if (spice) 'spice': true,
+      if (quantityUnknown) 'quantity_unknown': true,
       if (deleted) 'deleted': true,
     };
     if (isCount) {
@@ -219,6 +233,8 @@ class PantryItem {
         lastPrice: _num(j['last_price'] ?? j['price']),
         updatedAtMs: (j['updated_at_ms'] as num?)?.toInt() ?? 0,
         deleted: j['deleted'] == true,
+        spice: j['spice'] == true,
+        quantityUnknown: j['quantity_unknown'] == true,
       );
     }
     return PantryItem(
@@ -237,6 +253,8 @@ class PantryItem {
       lastPrice: _num(j['last_price'] ?? j['price']),
       updatedAtMs: (j['updated_at_ms'] as num?)?.toInt() ?? 0,
       deleted: j['deleted'] == true,
+      spice: j['spice'] == true,
+      quantityUnknown: j['quantity_unknown'] == true,
     );
   }
 }
