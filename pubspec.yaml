@@ -31,6 +31,7 @@ dependencies:
   google_fonts: ^6.2.1             # Fraunces / Inter / IBM Plex Mono (editorial UI)
   wakelock_plus: ^1.2.8            # keep the screen awake in Cooking Mode
   vibration: ^3.1.0               # buzz when a step timer hits zero
+  flutter_local_notifications: ^18.0.1  # audible alarm when a step timer ends
 
 dev_dependencies:
   flutter_test:

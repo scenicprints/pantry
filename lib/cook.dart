@@ -8,6 +8,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'chef.dart';
 import 'chef_models.dart';
 import 'models.dart';
+import 'notifications.dart';
 import 'storage.dart';
 import 'theme.dart';
 
@@ -544,6 +545,7 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
   void initState() {
     super.initState();
     WakelockPlus.enable();
+    Notifications.requestPermission();
   }
 
   @override
@@ -580,7 +582,10 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
             controller: _pc,
             itemCount: steps.length,
             onPageChanged: (int i) => setState(() => _page = i),
-            itemBuilder: (_, int i) => _stepPage(i + 1, steps[i]),
+            // Keep each step alive so a running timer isn't destroyed (and
+            // silenced) when you swipe to another step.
+            itemBuilder: (_, int i) =>
+                _KeepAlive(child: _stepPage(i + 1, steps[i])),
           ),
         ),
         SafeArea(
@@ -715,9 +720,10 @@ class _StepTimerState extends State<StepTimer> {
 
   Future<void> _alert() async {
     HapticFeedback.heavyImpact();
+    Notifications.alarm('Timer done', 'A cooking step timer just finished.');
     try {
       if (await Vibration.hasVibrator()) {
-        Vibration.vibrate(pattern: <int>[0, 400, 200, 400, 200, 600]);
+        Vibration.vibrate(pattern: <int>[0, 500, 250, 500, 250, 800]);
       }
     } catch (_) {}
   }
@@ -942,6 +948,25 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
 // ═══════════════════════════════════════════════════════════════════════
 // Shared: run an async task under a modal spinner; show errors as a snackbar.
 // ═══════════════════════════════════════════════════════════════════════
+
+/// Keeps a PageView child (and its running step timer) alive when off-screen.
+class _KeepAlive extends StatefulWidget {
+  final Widget child;
+  const _KeepAlive({required this.child});
+  @override
+  State<_KeepAlive> createState() => _KeepAliveState();
+}
+
+class _KeepAliveState extends State<_KeepAlive>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
+  @override
+  Widget build(BuildContext context) {
+    super.build(context);
+    return widget.child;
+  }
+}
 
 Future<T?> withSpinner<T>(
     BuildContext context, String message, Future<T> Function() task) async {
