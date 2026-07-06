@@ -50,7 +50,8 @@ jobs:
       - name: Build release APK
         env:
           GITHUB_DATA_TOKEN: ${{ secrets.PANTRY_DATA_TOKEN }}
-        run: flutter build apk --release --dart-define=GITHUB_DATA_TOKEN=$GITHUB_DATA_TOKEN
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: flutter build apk --release --dart-define=GITHUB_DATA_TOKEN=$GITHUB_DATA_TOKEN --dart-define=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY
 
       - name: Rename APK to versioned name
         run: |

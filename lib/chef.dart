@@ -24,6 +24,7 @@ import 'models.dart';
 
 const String kChefModelHaiku = 'claude-haiku-4-5';
 const String kChefModelSonnet = 'claude-sonnet-4-6';
+const String kChefModelOpus = 'claude-opus-4-8';
 
 class ChefException implements Exception {
   final String message;
@@ -36,23 +37,47 @@ class ChefException implements Exception {
 class ChefKeys {
   static const FlutterSecureStorage _s = FlutterSecureStorage();
   static const String _kKey = 'chef_api_key';
-  static const String _kModel = 'chef_model'; // 'haiku' | 'sonnet'
+  static const String _kModel = 'chef_model'; // 'haiku' | 'sonnet' | 'opus'
 
-  static Future<String?> getApiKey() => _s.read(key: _kKey);
-  static Future<void> setApiKey(String v) =>
-      v.trim().isEmpty ? _s.delete(key: _kKey) : _s.write(key: _kKey, value: v.trim());
-  static Future<bool> hasApiKey() async =>
-      (await getApiKey())?.isNotEmpty ?? false;
+  /// Key baked in at build time via --dart-define=ANTHROPIC_API_KEY=… (a
+  /// GitHub Actions secret; shared with BodyComp). A user-entered key
+  /// overrides it. Empty in local/dev builds.
+  static const String _bakedKey = String.fromEnvironment('ANTHROPIC_API_KEY');
+  static bool get hasBakedKey => _bakedKey.isNotEmpty;
 
-  static Future<String> getModelId() async {
-    final String? m = await _s.read(key: _kModel);
-    return m == 'sonnet' ? kChefModelSonnet : kChefModelHaiku;
+  /// The user's own key (null if they haven't set one).
+  static Future<String?> getUserKey() => _s.read(key: _kKey);
+  static Future<void> setApiKey(String v) => v.trim().isEmpty
+      ? _s.delete(key: _kKey)
+      : _s.write(key: _kKey, value: v.trim());
+  static Future<bool> hasUserKey() async =>
+      (await getUserKey())?.isNotEmpty ?? false;
+
+  /// The key actually used for calls: the user's if set, else the baked one.
+  static Future<String> effectiveKey() async {
+    final String? u = await getUserKey();
+    if (u != null && u.isNotEmpty) {
+      return u;
+    }
+    return _bakedKey;
   }
 
-  static Future<bool> isSonnet() async =>
-      (await _s.read(key: _kModel)) == 'sonnet';
-  static Future<void> setSonnet(bool on) =>
-      _s.write(key: _kModel, value: on ? 'sonnet' : 'haiku');
+  static Future<bool> hasUsableKey() async => (await effectiveKey()).isNotEmpty;
+
+  static Future<String> getModelPref() async =>
+      (await _s.read(key: _kModel)) ?? 'haiku';
+  static Future<void> setModelPref(String p) => _s.write(key: _kModel, value: p);
+
+  static Future<String> getModelId() async {
+    switch (await getModelPref()) {
+      case 'opus':
+        return kChefModelOpus;
+      case 'sonnet':
+        return kChefModelSonnet;
+      default:
+        return kChefModelHaiku;
+    }
+  }
 }
 
 class Chef {
@@ -122,8 +147,8 @@ new buys, and storage/pro tips.''';
     required String user,
     required int maxTokens,
   }) async {
-    final String? key = await ChefKeys.getApiKey();
-    if (key == null || key.isEmpty) {
+    final String key = await ChefKeys.effectiveKey();
+    if (key.isEmpty) {
       throw ChefException('Add your Claude API key in Settings first.');
     }
     final String model = await ChefKeys.getModelId();

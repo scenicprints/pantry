@@ -34,7 +34,7 @@ class _CookTabState extends State<CookTab> {
   void initState() {
     super.initState();
     _history = MealHistory.decode(LocalCache.loadHistory());
-    ChefKeys.hasApiKey().then((bool v) {
+    ChefKeys.hasUsableKey().then((bool v) {
       if (mounted) {
         setState(() => _hasKey = v);
       }
@@ -779,20 +779,26 @@ class ChefSettingsCard extends StatefulWidget {
 class _ChefSettingsCardState extends State<ChefSettingsCard> {
   final TextEditingController _key = TextEditingController();
   bool _obscure = true;
-  bool _hasKey = false;
-  bool _sonnet = false;
+  bool _hasUserKey = false;
+  String _model = 'haiku';
+
+  static const Map<String, String> _modelCost = <String, String>{
+    'haiku': 'Fast & cheap — under \$0.01 per meal. Recommended.',
+    'sonnet': 'More creative — a few cents per meal.',
+    'opus': 'Most capable — ~15-25¢ per meal. For special occasions.',
+  };
 
   @override
   void initState() {
     super.initState();
-    ChefKeys.hasApiKey().then((bool v) {
+    ChefKeys.hasUserKey().then((bool v) {
       if (mounted) {
-        setState(() => _hasKey = v);
+        setState(() => _hasUserKey = v);
       }
     }).catchError((Object _) {});
-    ChefKeys.isSonnet().then((bool v) {
+    ChefKeys.getModelPref().then((String p) {
       if (mounted) {
-        setState(() => _sonnet = v);
+        setState(() => _model = p);
       }
     }).catchError((Object _) {});
   }
@@ -813,7 +819,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     if (!mounted) {
       return;
     }
-    setState(() => _hasKey = true);
+    setState(() => _hasUserKey = true);
     ScaffoldMessenger.of(context)
         .showSnackBar(const SnackBar(content: Text('API key saved.')));
   }
@@ -821,12 +827,19 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
   Future<void> _clear() async {
     await ChefKeys.setApiKey('');
     if (mounted) {
-      setState(() => _hasKey = false);
+      setState(() => _hasUserKey = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final bool usingBuiltIn = !_hasUserKey && ChefKeys.hasBakedKey;
+    final bool ok = _hasUserKey || ChefKeys.hasBakedKey;
+    final String status = _hasUserKey
+        ? 'Your own Claude API key is saved on this device.'
+        : usingBuiltIn
+            ? 'Using the built-in key — no setup needed. Paste your own to override.'
+            : 'No API key yet — paste one below to enable the chef.';
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -837,17 +850,11 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
         Text('AI CHEF', style: labelCaps(color: kMuted)),
         const SizedBox(height: 12),
         Row(children: <Widget>[
-          Icon(_hasKey ? Icons.check_circle_rounded : Icons.key_off_rounded,
-              size: 18, color: _hasKey ? kOlive : kWarn),
+          Icon(ok ? Icons.check_circle_rounded : Icons.key_off_rounded,
+              size: 18, color: ok ? kOlive : kWarn),
           const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-                _hasKey
-                    ? 'Claude API key saved on this device.'
-                    : 'No API key yet — paste one below to enable the chef.',
-                style: TextStyle(fontSize: 13, color: kInk)),
-          ),
-          if (_hasKey)
+          Expanded(child: Text(status, style: TextStyle(fontSize: 13, color: kInk))),
+          if (_hasUserKey)
             TextButton(
                 onPressed: _clear,
                 child: const Text('Clear', style: TextStyle(color: kDanger))),
@@ -862,7 +869,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
               enableSuggestions: false,
               style: mono(size: 13),
               decoration: InputDecoration(
-                hintText: _hasKey ? 'Replace key (sk-ant-…)' : 'sk-ant-…',
+                hintText: _hasUserKey ? 'Replace key (sk-ant-…)' : 'sk-ant-…',
                 hintStyle: TextStyle(color: kFaint),
                 isDense: true,
                 filled: true,
@@ -896,31 +903,36 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
             child: const Text('Save', style: TextStyle(fontWeight: FontWeight.w700)),
           ),
         ]),
-        const SizedBox(height: 14),
-        Row(children: <Widget>[
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-              Text(_sonnet ? 'Sonnet (more creative)' : 'Haiku (fast & cheap)',
-                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-              Text(
-                  _sonnet
-                      ? '~a few cents per meal'
-                      : 'under \$0.01 per meal — recommended',
-                  style: TextStyle(fontSize: 12, color: kMuted)),
-            ]),
+        const SizedBox(height: 16),
+        Text('MODEL', style: labelCaps(color: kMuted)),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const <ButtonSegment<String>>[
+            ButtonSegment<String>(value: 'haiku', label: Text('Haiku')),
+            ButtonSegment<String>(value: 'sonnet', label: Text('Sonnet')),
+            ButtonSegment<String>(value: 'opus', label: Text('Opus 4.8')),
+          ],
+          selected: <String>{_model},
+          showSelectedIcon: false,
+          onSelectionChanged: (Set<String> s) {
+            setState(() => _model = s.first);
+            ChefKeys.setModelPref(s.first);
+          },
+          style: ButtonStyle(
+            backgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> st) =>
+                st.contains(WidgetState.selected)
+                    ? kAccent.withValues(alpha: 0.16)
+                    : kCard),
+            foregroundColor: WidgetStateProperty.all(kInk),
+            side: WidgetStateProperty.all(const BorderSide(color: kBorder)),
           ),
-          Switch(
-            value: _sonnet,
-            activeTrackColor: kAccent,
-            onChanged: (bool v) {
-              setState(() => _sonnet = v);
-              ChefKeys.setSonnet(v);
-            },
-          ),
-        ]),
+        ),
         const SizedBox(height: 6),
-        Text('Your key is stored encrypted on this device and used only to '
-            'call the Claude API directly. Billing is pay-as-you-go.',
+        Text(_modelCost[_model] ?? '',
+            style: TextStyle(fontSize: 12, color: kMuted)),
+        const SizedBox(height: 10),
+        Text('Calls the Claude API directly. Billing is pay-as-you-go and '
+            'separate from any Claude.ai subscription.',
             style: TextStyle(fontSize: 11, color: kFaint, height: 1.4)),
       ]),
     );
