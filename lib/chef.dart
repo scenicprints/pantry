@@ -102,6 +102,10 @@ Propose exactly 3 dinner options. Each option MUST use a DIFFERENT protein from
 the accepted list. Prioritize any [EXPIRING SOON] ingredient. Options must be
 genuinely different from each other. Follow every hard rule.
 
+The pantry above is the COMPLETE list of what the user has. Everything else —
+including any protein, oil, spice, or staple — is a NEW BUY. Do not claim the
+user already has an ingredient that is not listed above; put it in newBuys.
+
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"options":[{"title":"","desc":"","protein":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0}]}
 "newBuys" is a short comma list (or "No new buys" if all from pantry).''';
@@ -122,12 +126,19 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   static Future<Recipe> generateRecipe({
     required MealOption option,
     required int servings,
+    required List<PantryItem> pantry,
   }) async {
     final String user = '''
 Write the full recipe for "${option.title}" (${option.desc}) for $servings
 ${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
 like eggs as counts). Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
+
+PANTRY (the complete list of what the user has on hand):
+${formatPantry(pantry)}
+
+For every ingredient NOT in that pantry list, append " (new buy)" to its name in
+the ingredients list. Do not imply the user already has anything not listed.
 
 For each step, set "timerSeconds" to the number of seconds for any wait/cook/
 rest timer in that step (e.g. 6 minutes = 360). Use 0 when the step has no
@@ -308,6 +319,21 @@ USER PROFILE (hard rules — never violate):
 - Equipment: air fryer, oven, stove, toaster oven.
 - Goals: weight loss, high protein, low calorie, superfoods, more energy.
 - Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
+
+THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
+- The pantry list you are given each time is EXHAUSTIVE. Treat ONLY those exact
+  items as in-stock.
+- EVERYTHING else is a NEW BUY — including basics like salt, pepper, oil,
+  garlic, onion, eggs, rice, flour, spices, sauces, butter, cheese. If an
+  ingredient is not in the list, the user does NOT have it. Never state or imply
+  they already have it.
+- `newBuys` for each option must name EVERY ingredient the meal needs that is
+  not in the pantry list. Only say "No new buys" if the meal truly uses nothing
+  but pantry items.
+- When the pantry is nearly empty, it is expected and correct for options to
+  need several new buys — be honest about it, don't pretend items are on hand.
+- In recipes, append " (new buy)" to any ingredient name that is not in the
+  pantry.
 
 MEAL GENERATION RULES:
 1. Present exactly 3 options; the user picks one.

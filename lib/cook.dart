@@ -76,8 +76,8 @@ class _CookTabState extends State<CookTab> {
           servings: _servings,
           recentMeals: _history.recent(),
         ),
-        onPick: (MealOption o) =>
-            Chef.generateRecipe(option: o, servings: _servings),
+        onPick: (MealOption o) => Chef.generateRecipe(
+            option: o, servings: _servings, pantry: widget.items),
         onCooked: _markCooked,
       ),
     ));
