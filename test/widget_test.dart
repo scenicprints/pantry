@@ -1,6 +1,7 @@
 // Smoke test + unit tests for the pantry data model.
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import 'package:pantry/main.dart';
 import 'package:pantry/models.dart';
@@ -31,6 +32,7 @@ PantryItem _weight({
 
 void main() {
   testWidgets('App boots to the Pantry screen', (WidgetTester tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false; // no network in tests
     await tester.pumpWidget(const PantryApp());
     await tester.pump();
     expect(find.text('Pantry'), findsWidgets);

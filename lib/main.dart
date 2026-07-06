@@ -4,24 +4,20 @@ import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'cook.dart';
 import 'food_lookup.dart';
 import 'github_sync.dart';
 import 'label_parser.dart';
 import 'models.dart';
 import 'storage.dart';
+import 'theme.dart';
 import 'updater.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
-// PANTRY — inventory & cost tracker. Scans groceries, tracks remaining
-// amount + cost, and syncs pantry.json to GitHub for the AI chef to read.
+// PANTRY — inventory & cost tracker + AI chef. Scans groceries, tracks
+// remaining amount + cost, syncs pantry.json to GitHub, and cooks from it.
+// The warm editorial palette + fonts live in theme.dart.
 // ═══════════════════════════════════════════════════════════════════════
-
-const Color kBg = Color(0xFF0E0F12);
-const Color kCard = Color(0xFF1A1A1A);
-const Color kBorder = Color(0xFF232323);
-const Color kAccent = Color(0xFF6FCF97); // fresh green
-const Color kWarn = Color(0xFFE0A458); // amber for expiring
-const Color kDanger = Color(0xFFCC6B6B);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -37,13 +33,7 @@ class PantryApp extends StatelessWidget {
     return MaterialApp(
       title: 'Pantry',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.dark,
-        scaffoldBackgroundColor: kBg,
-        colorScheme: const ColorScheme.dark(primary: kAccent, surface: kCard),
-        fontFamily: 'Roboto',
-      ),
+      theme: buildPantryTheme(),
       home: const HomePage(),
     );
   }
@@ -313,7 +303,7 @@ class _HomePageState extends State<HomePage> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             const CircularProgressIndicator(color: kAccent),
             const SizedBox(height: 14),
-            Text(msg, style: const TextStyle(color: Colors.white70)),
+            Text(msg, style: const TextStyle(color: kMuted)),
           ]),
         ),
       ),
@@ -322,7 +312,7 @@ class _HomePageState extends State<HomePage> {
 
   void _snack(String msg) {
     ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(backgroundColor: const Color(0xFF2A2A2A), content: Text(msg)));
+        SnackBar(backgroundColor: kInk, content: Text(msg)));
   }
 
   void _showAddMenu() {
@@ -362,7 +352,7 @@ class _HomePageState extends State<HomePage> {
       title: Text(title,
           style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15)),
       subtitle:
-          Text(sub, style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+          Text(sub, style: TextStyle(color: kMuted, fontSize: 12)),
       onTap: onTap,
     );
   }
@@ -376,6 +366,7 @@ class _HomePageState extends State<HomePage> {
         _quick.where((QuickAddItem q) => !q.deleted).toList();
     final List<Widget> pages = <Widget>[
       PantryTab(items: visibleItems, onTapItem: _openItem),
+      CookTab(items: visibleItems),
       QuickAddTab(
           quick: visibleQuick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(
@@ -406,11 +397,14 @@ class _HomePageState extends State<HomePage> {
                 preferredSize: const Size.fromHeight(22),
                 child: Container(
                   width: double.infinity,
-                  color: const Color(0xFF201A12),
+                  color: kWarn.withValues(alpha: 0.16),
                   padding:
                       const EdgeInsets.symmetric(vertical: 3, horizontal: 16),
                   child: Text(_syncMsg,
-                      style: const TextStyle(fontSize: 11, color: kWarn)),
+                      style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFF8A5A22),
+                          fontWeight: FontWeight.w600)),
                 ),
               ),
       ),
@@ -419,7 +413,7 @@ class _HomePageState extends State<HomePage> {
       floatingActionButton: _tab == 0
           ? FloatingActionButton.extended(
               backgroundColor: kAccent,
-              foregroundColor: Colors.black,
+              foregroundColor: Colors.white,
               onPressed: _showAddMenu,
               icon: const Icon(Icons.add),
               label: const Text('Add',
@@ -435,6 +429,8 @@ class _HomePageState extends State<HomePage> {
         destinations: const <NavigationDestination>[
           NavigationDestination(
               icon: Icon(Icons.list_alt_rounded), label: 'Pantry'),
+          NavigationDestination(
+              icon: Icon(Icons.restaurant_menu_rounded), label: 'Cook'),
           NavigationDestination(icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
           NavigationDestination(
               icon: Icon(Icons.settings_rounded), label: 'Settings'),
@@ -515,13 +511,13 @@ class PantryTab extends StatelessWidget {
 
   Widget _empty() => Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.kitchen_outlined, size: 54, color: Colors.grey[700]),
+          Icon(Icons.kitchen_outlined, size: 54, color: kFaint),
           const SizedBox(height: 14),
           Text('Your pantry is empty.',
-              style: TextStyle(color: Colors.grey[500], fontSize: 15)),
+              style: TextStyle(color: kMuted, fontSize: 15)),
           const SizedBox(height: 4),
           Text('Tap Add to scan your first item.',
-              style: TextStyle(color: Colors.grey[700], fontSize: 13)),
+              style: TextStyle(color: kFaint, fontSize: 13)),
         ]),
       );
 
@@ -552,11 +548,11 @@ class PantryTab extends StatelessWidget {
                 margin: const EdgeInsets.only(right: 6),
                 padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                 decoration: BoxDecoration(
-                    color: kBg, borderRadius: BorderRadius.circular(20)),
+                    color: kInset, borderRadius: BorderRadius.circular(20)),
                 child: Text('COUNT',
                     style: TextStyle(
                         fontSize: 9,
-                        color: Colors.grey[500],
+                        color: kMuted,
                         fontWeight: FontWeight.w700,
                         letterSpacing: 0.6)),
               ),
@@ -580,7 +576,7 @@ class PantryTab extends StatelessWidget {
             child: LinearProgressIndicator(
               value: pct,
               minHeight: 5,
-              backgroundColor: const Color(0xFF111111),
+              backgroundColor: kInset,
               valueColor:
                   AlwaysStoppedAnimation<Color>(expiring ? kWarn : kAccent),
             ),
@@ -588,18 +584,18 @@ class PantryTab extends StatelessWidget {
           const SizedBox(height: 8),
           Row(children: [
             Text('${_fmt(it.remaining)} / ${_fmt(it.total)} $u',
-                style: TextStyle(fontSize: 12, color: Colors.grey[400])),
+                style: TextStyle(fontSize: 12, color: kMuted)),
             const Spacer(),
             Text(
                 '\$${it.price.toStringAsFixed(2)}  ·  '
                 '\$${it.pricePer.toStringAsFixed(it.isCount ? 2 : 4)}/$u',
-                style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+                style: TextStyle(fontSize: 12, color: kMuted)),
           ]),
           if (it.expirationDate != null && it.expirationDate!.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text('Expires ${it.expirationDate}',
                 style: TextStyle(
-                    fontSize: 11, color: expiring ? kWarn : Colors.grey[600])),
+                    fontSize: 11, color: expiring ? kWarn : kMuted)),
           ],
         ]),
       ),
@@ -679,7 +675,7 @@ class _ItemSheetState extends State<ItemSheet> {
         Align(
           alignment: Alignment.centerLeft,
           child: Text('${_fmt(it.remaining)} $u left of ${_fmt(it.total)} $u',
-              style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+              style: TextStyle(color: kMuted, fontSize: 13)),
         ),
         if (!m.isEmpty) ...[
           const SizedBox(height: 12),
@@ -691,7 +687,7 @@ class _ItemSheetState extends State<ItemSheet> {
                     : 'PER SERVING · ${it.servingLabel}',
                 style: TextStyle(
                     fontSize: 10,
-                    color: Colors.grey[600],
+                    color: kMuted,
                     letterSpacing: 1,
                     fontWeight: FontWeight.w600)),
           ),
@@ -709,7 +705,7 @@ class _ItemSheetState extends State<ItemSheet> {
           child: Text('ADJUST AMOUNT',
               style: TextStyle(
                   fontSize: 11,
-                  color: Colors.grey[500],
+                  color: kMuted,
                   letterSpacing: 1,
                   fontWeight: FontWeight.w600)),
         ),
@@ -745,7 +741,7 @@ class _ItemSheetState extends State<ItemSheet> {
               label: const Text('Add'),
               style: ElevatedButton.styleFrom(
                   backgroundColor: kAccent,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(10))),
@@ -754,7 +750,7 @@ class _ItemSheetState extends State<ItemSheet> {
         ]),
         const SizedBox(height: 6),
         Text('Use = cooked/consumed.  Add = bought more.',
-            style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+            style: TextStyle(fontSize: 11, color: kMuted)),
         const SizedBox(height: 16),
         Row(children: [
           Expanded(
@@ -775,7 +771,7 @@ class _ItemSheetState extends State<ItemSheet> {
               icon: const Icon(Icons.edit_rounded, size: 18),
               label: const Text('Edit'),
               style: OutlinedButton.styleFrom(
-                  foregroundColor: Colors.grey[300],
+                  foregroundColor: kInk,
                   side: const BorderSide(color: kBorder),
                   padding: const EdgeInsets.symmetric(vertical: 12)),
             ),
@@ -796,12 +792,12 @@ class _ItemSheetState extends State<ItemSheet> {
           margin: const EdgeInsets.symmetric(horizontal: 3),
           padding: const EdgeInsets.symmetric(vertical: 10),
           decoration:
-              BoxDecoration(color: kBg, borderRadius: BorderRadius.circular(10)),
+              BoxDecoration(color: kInset, borderRadius: BorderRadius.circular(10)),
           child: Column(children: [
             Text(v.toStringAsFixed(v >= 100 ? 0 : 1),
                 style:
                     const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-            Text(label, style: TextStyle(fontSize: 10, color: Colors.grey[500])),
+            Text(label, style: TextStyle(fontSize: 10, color: kMuted)),
           ]),
         ),
       );
@@ -989,7 +985,7 @@ class _AddItemPageState extends State<AddItemPage> {
                       ? kAccent.withValues(alpha: 0.18)
                       : kCard),
               foregroundColor:
-                  WidgetStateProperty.all(Colors.grey[200]),
+                  WidgetStateProperty.all(kInk),
             ),
           ),
           const SizedBox(height: 16),
@@ -1045,7 +1041,7 @@ class _AddItemPageState extends State<AddItemPage> {
               onPressed: _save,
               style: ElevatedButton.styleFrom(
                   backgroundColor: kAccent,
-                  foregroundColor: Colors.black,
+                  foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 16),
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12))),
@@ -1070,7 +1066,7 @@ class _AddItemPageState extends State<AddItemPage> {
               ? 'Price per ${_isCount ? "item" : "gram"}: '
                   '\$${ppg.toStringAsFixed(_isCount ? 2 : 4)}/$u'
               : 'Enter total ${_isCount ? "count" : "weight"} to compute price per ${_isCount ? "item" : "gram"}.',
-          style: TextStyle(fontSize: 12, color: Colors.grey[500])),
+          style: TextStyle(fontSize: 12, color: kMuted)),
     );
   }
 
@@ -1079,7 +1075,7 @@ class _AddItemPageState extends State<AddItemPage> {
       Expanded(
         child: Text(_expiration ?? 'No expiration set',
             style: TextStyle(
-                color: _expiration == null ? Colors.grey[600] : Colors.white)),
+                color: _expiration == null ? kMuted : kInk)),
       ),
       if (_expiration != null)
         TextButton(
@@ -1107,7 +1103,7 @@ class _AddItemPageState extends State<AddItemPage> {
       builder: (BuildContext ctx, Widget? child) => Theme(
         data: Theme.of(ctx).copyWith(
             colorScheme: const ColorScheme.dark(
-                primary: kAccent, onPrimary: Colors.black, surface: kCard)),
+                primary: kAccent, onPrimary: Colors.white, surface: kCard)),
         child: child!,
       ),
     );
@@ -1122,7 +1118,7 @@ class _AddItemPageState extends State<AddItemPage> {
         child: Text(s,
             style: TextStyle(
                 fontSize: 11,
-                color: Colors.grey[500],
+                color: kMuted,
                 letterSpacing: 1,
                 fontWeight: FontWeight.w600)),
       );
@@ -1186,17 +1182,17 @@ class QuickAddTab extends StatelessWidget {
     if (quick.isEmpty) {
       return Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(Icons.bolt_outlined, size: 54, color: Colors.grey[700]),
+          Icon(Icons.bolt_outlined, size: 54, color: kFaint),
           const SizedBox(height: 14),
           Text('No quick-add items yet.',
-              style: TextStyle(color: Colors.grey[500], fontSize: 15)),
+              style: TextStyle(color: kMuted, fontSize: 15)),
           const SizedBox(height: 4),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 40),
             child: Text(
                 'Open any pantry item and tap “Quick-Add” to save it here for one-tap re-adding.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[700], fontSize: 13)),
+                style: TextStyle(color: kFaint, fontSize: 13)),
           ),
         ]),
       );
@@ -1220,17 +1216,17 @@ class QuickAddTab extends StatelessWidget {
             title: Text(q.name,
                 style: const TextStyle(fontWeight: FontWeight.w600)),
             subtitle: Text('Last \$${q.lastPrice.toStringAsFixed(2)}$macroNote',
-                style: TextStyle(color: Colors.grey[500], fontSize: 12)),
+                style: TextStyle(color: kMuted, fontSize: 12)),
             trailing: Row(mainAxisSize: MainAxisSize.min, children: [
               IconButton(
                 onPressed: () => onDelete(q),
                 icon: const Icon(Icons.close_rounded, size: 18),
-                color: Colors.grey[600],
+                color: kMuted,
               ),
               FilledButton(
                 onPressed: () => onReAdd(q),
                 style: FilledButton.styleFrom(
-                    backgroundColor: kAccent, foregroundColor: Colors.black),
+                    backgroundColor: kAccent, foregroundColor: Colors.white),
                 child: const Text('Re-add',
                     style: TextStyle(fontWeight: FontWeight.w700)),
               ),
@@ -1274,7 +1270,7 @@ class SettingsTab extends StatelessWidget {
             Text('GITHUB SYNC',
                 style: TextStyle(
                     fontSize: 11,
-                    color: Colors.grey[600],
+                    color: kMuted,
                     letterSpacing: 1,
                     fontWeight: FontWeight.w600)),
             const SizedBox(height: 12),
@@ -1291,12 +1287,12 @@ class SettingsTab extends StatelessWidget {
                     PantrySync.canWrite
                         ? 'Writing to $kDataRepoOwner/$kDataRepoName → $kPantryPath'
                         : 'Read-only build — write token not configured.',
-                    style: TextStyle(fontSize: 13, color: Colors.grey[300])),
+                    style: TextStyle(fontSize: 13, color: kInk)),
               ),
             ]),
             const SizedBox(height: 6),
             Text('$itemCount items tracked',
-                style: TextStyle(fontSize: 12, color: Colors.grey[600])),
+                style: TextStyle(fontSize: 12, color: kMuted)),
             const SizedBox(height: 14),
             SizedBox(
               width: double.infinity,
@@ -1313,11 +1309,13 @@ class SettingsTab extends StatelessWidget {
           ]),
         ),
         const SizedBox(height: 14),
+        const ChefSettingsCard(),
+        const SizedBox(height: 14),
         const UpdateCard(accent: kAccent),
         const SizedBox(height: 20),
         Center(
-          child: Text('Pantry — feeds the AI chef',
-              style: TextStyle(color: Colors.grey[700], fontSize: 12)),
+          child: Text('Pantry — scans, tracks, and cooks',
+              style: TextStyle(color: kFaint, fontSize: 12)),
         ),
       ],
     );
@@ -1397,7 +1395,7 @@ class _ScanPageState extends State<ScanPage> {
           right: 0,
           child: Text('Point at a product barcode',
               textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.grey[400])),
+              style: TextStyle(color: kMuted)),
         ),
       ]),
     );
@@ -1419,8 +1417,8 @@ String _todayStr() {
 InputDecoration _dec(String hint, {String? label}) => InputDecoration(
       hintText: hint,
       labelText: label,
-      labelStyle: TextStyle(color: Colors.grey[500], fontSize: 13),
-      hintStyle: TextStyle(color: Colors.grey[700]),
+      labelStyle: TextStyle(color: kMuted, fontSize: 13),
+      hintStyle: TextStyle(color: kFaint),
       filled: true,
       fillColor: kCard,
       contentPadding:
