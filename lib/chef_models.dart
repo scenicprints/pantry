@@ -47,6 +47,8 @@ class RecipeIngredient {
         amount: (j['amount'] as String?)?.trim() ?? '',
       );
 
+  Map<String, dynamic> toJson() => <String, dynamic>{'item': item, 'amount': amount};
+
   /// This amount rescaled by [factor], keeping the unit text.
   String scaled(double factor) => _scaleAmount(amount, factor);
 }
@@ -69,6 +71,12 @@ class RecipeStep {
         content: (j['content'] as String?)?.trim() ?? '',
         timerSeconds: (j['timerSeconds'] as num?)?.round() ?? 0,
       );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'title': title,
+        'content': content,
+        'timerSeconds': timerSeconds,
+      };
 }
 
 /// A full recipe. [baseServings] is what the API was asked to write for;
@@ -105,6 +113,105 @@ class Recipe {
         notes: (j['notes'] as String?)?.trim() ?? '',
         baseServings: baseServings,
       );
+
+  /// Rebuild a Recipe from its own stored JSON (baseServings lives in the map).
+  factory Recipe.fromStored(Map<String, dynamic> j) =>
+      Recipe.fromJson(j, baseServings: (j['baseServings'] as num?)?.round() ?? 2);
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'title': title,
+        'description': description,
+        'ingredients':
+            ingredients.map((RecipeIngredient e) => e.toJson()).toList(),
+        'steps': steps.map((RecipeStep e) => e.toJson()).toList(),
+        'notes': notes,
+        'baseServings': baseServings,
+      };
+}
+
+// ── planned meals ("On the menu") ─────────────────────────────────────────
+
+/// A recipe the user picked ahead of time and is holding onto so they can
+/// shop for it and cook it later. Persists (survives restarts) until cooked.
+/// [checked] is parallel to [recipe.ingredients] — the shopping-list ticks.
+class PlannedMeal {
+  final int createdAtMs; // also the stable id
+  final Recipe recipe;
+  final int servings;
+  final List<bool> checked;
+
+  const PlannedMeal({
+    required this.createdAtMs,
+    required this.recipe,
+    required this.servings,
+    required this.checked,
+  });
+
+  String get id => createdAtMs.toString();
+
+  double get factor =>
+      recipe.baseServings == 0 ? 1 : servings / recipe.baseServings;
+
+  int get total => recipe.ingredients.length;
+  int get gathered => checked.where((bool b) => b).length;
+  bool get allGathered => total > 0 && gathered == total;
+
+  PlannedMeal copyWith({int? servings, List<bool>? checked}) => PlannedMeal(
+        createdAtMs: createdAtMs,
+        recipe: recipe,
+        servings: servings ?? this.servings,
+        checked: checked ?? this.checked,
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'createdAtMs': createdAtMs,
+        'servings': servings,
+        'checked': checked,
+        'recipe': recipe.toJson(),
+      };
+
+  factory PlannedMeal.fromJson(Map<String, dynamic> j) {
+    final Recipe r =
+        Recipe.fromStored((j['recipe'] as Map).cast<String, dynamic>());
+    final List<dynamic> c = (j['checked'] as List<dynamic>?) ?? const <dynamic>[];
+    // Normalise the tick list to the ingredient count so a schema drift or a
+    // hand-edited file can't throw or leave a dangling checkbox.
+    final List<bool> checked = List<bool>.generate(
+        r.ingredients.length, (int i) => i < c.length && c[i] == true);
+    return PlannedMeal(
+      createdAtMs: (j['createdAtMs'] as num?)?.round() ?? 0,
+      recipe: r,
+      servings: (j['servings'] as num?)?.round() ?? r.baseServings,
+      checked: checked,
+    );
+  }
+}
+
+/// The whole "On the menu" list, newest last. Encodes/decodes defensively so
+/// a bad file just yields an empty menu instead of bricking the Cook tab.
+class PlannedMenu {
+  final List<PlannedMeal> meals;
+  const PlannedMenu(this.meals);
+
+  String encode() => jsonEncode(<String, dynamic>{
+        'meals': meals.map((PlannedMeal m) => m.toJson()).toList(),
+      });
+
+  static PlannedMenu decode(String? s) {
+    if (s == null || s.isEmpty) {
+      return const PlannedMenu(<PlannedMeal>[]);
+    }
+    try {
+      final dynamic d = jsonDecode(s);
+      final List<dynamic> m = (d is Map ? d['meals'] : d) as List<dynamic>;
+      return PlannedMenu(m
+          .whereType<Map>()
+          .map((Map e) => PlannedMeal.fromJson(e.cast<String, dynamic>()))
+          .toList());
+    } catch (_) {
+      return const PlannedMenu(<PlannedMeal>[]);
+    }
+  }
 }
 
 // ── meal history ─────────────────────────────────────────────────────────

@@ -29,12 +29,14 @@ class CookTab extends StatefulWidget {
 class _CookTabState extends State<CookTab> {
   int _servings = 2;
   MealHistory _history = const MealHistory(kSeedMealHistory);
+  List<PlannedMeal> _planned = <PlannedMeal>[];
   bool _hasKey = false;
 
   @override
   void initState() {
     super.initState();
     _history = MealHistory.decode(LocalCache.loadHistory());
+    _planned = PlannedMenu.decode(LocalCache.loadPlanned()).meals;
     ChefKeys.hasUsableKey().then((bool v) {
       if (mounted) {
         setState(() => _hasKey = v);
@@ -45,6 +47,53 @@ class _CookTabState extends State<CookTab> {
   void _markCooked(String title) {
     setState(() => _history = _history.withCooked(title));
     LocalCache.saveHistory(_history.encode());
+  }
+
+  void _persistPlanned() =>
+      LocalCache.savePlanned(PlannedMenu(_planned).encode());
+
+  /// Save a freshly picked recipe onto the menu and return it (so the caller
+  /// can open its shopping list).
+  PlannedMeal _addPlanned(Recipe recipe, int servings) {
+    final PlannedMeal meal = PlannedMeal(
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+      recipe: recipe,
+      servings: servings,
+      checked: List<bool>.filled(recipe.ingredients.length, false),
+    );
+    setState(() => _planned = <PlannedMeal>[..._planned, meal]);
+    _persistPlanned();
+    return meal;
+  }
+
+  /// Persist an edit (a ticked ingredient or a servings change).
+  void _updatePlanned(PlannedMeal updated) {
+    final int i = _planned.indexWhere((PlannedMeal m) => m.id == updated.id);
+    if (i < 0) {
+      return;
+    }
+    setState(() {
+      _planned = <PlannedMeal>[..._planned];
+      _planned[i] = updated;
+    });
+    _persistPlanned();
+  }
+
+  void _removePlanned(PlannedMeal meal) {
+    setState(() =>
+        _planned = _planned.where((PlannedMeal m) => m.id != meal.id).toList());
+    _persistPlanned();
+  }
+
+  void _openPlanned(PlannedMeal meal) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PlannedMealScreen(
+        meal: meal,
+        onUpdate: _updatePlanned,
+        onCooked: _markCooked,
+        onRemove: _removePlanned,
+      ),
+    ));
   }
 
   int get _expiringCount {
@@ -78,7 +127,10 @@ class _CookTabState extends State<CookTab> {
         ),
         onPick: (MealOption o) => Chef.generateRecipe(
             option: o, servings: _servings, pantry: widget.items),
+        onPlan: _addPlanned,
+        onUpdate: _updatePlanned,
         onCooked: _markCooked,
+        onRemove: _removePlanned,
       ),
     ));
   }
@@ -97,6 +149,10 @@ class _CookTabState extends State<CookTab> {
             'what\'s in the kitchen.',
             style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
         const SizedBox(height: 24),
+        if (_planned.isNotEmpty) ...<Widget>[
+          _menuSection(),
+          const SizedBox(height: 24),
+        ],
         _statsRow(itemCount),
         const SizedBox(height: 24),
         _servingsStepper(),
@@ -151,6 +207,67 @@ class _CookTabState extends State<CookTab> {
           ]),
         ),
       );
+
+  Widget _menuSection() {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+      Row(children: <Widget>[
+        Text('ON THE MENU', style: labelCaps(color: kAccent)),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+              color: kAccent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(20)),
+          child: Text('${_planned.length}',
+              style: mono(size: 11, weight: FontWeight.w600, color: kAccent)),
+        ),
+      ]),
+      const SizedBox(height: 4),
+      Text('Saved to shop for and cook later. Tap for the shopping list.',
+          style: TextStyle(color: kMuted, fontSize: 12, height: 1.4)),
+      const SizedBox(height: 12),
+      for (final PlannedMeal m in _planned.reversed) _plannedCard(m),
+    ]);
+  }
+
+  Widget _plannedCard(PlannedMeal m) {
+    final bool ready = m.allGathered;
+    return GestureDetector(
+      onTap: () => _openPlanned(m),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: ready ? kOlive : kBorder)),
+        child: Row(children: <Widget>[
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+              Text(m.recipe.title,
+                  style: serif(size: 17, weight: FontWeight.w600, height: 1.2)),
+              const SizedBox(height: 6),
+              Row(children: <Widget>[
+                Icon(ready ? Icons.check_circle_rounded : Icons.shopping_cart_rounded,
+                    size: 13, color: ready ? kOlive : kMuted),
+                const SizedBox(width: 5),
+                Text(
+                    m.total == 0
+                        ? 'Serves ${m.servings}'
+                        : ready
+                            ? 'Shopping list complete'
+                            : '${m.gathered}/${m.total} gathered · serves ${m.servings}',
+                    style: mono(
+                        size: 11,
+                        color: ready ? kOlive : kMuted)),
+              ]),
+            ]),
+          ),
+          const Icon(Icons.chevron_right_rounded, color: kMuted),
+        ]),
+      ),
+    );
+  }
 
   Widget _servingsStepper() {
     return Container(
@@ -214,7 +331,10 @@ class OptionsScreen extends StatefulWidget {
   final int servings;
   final Future<List<MealOption>> Function() onRegenerate;
   final Future<Recipe> Function(MealOption) onPick;
+  final PlannedMeal Function(Recipe recipe, int servings) onPlan;
+  final void Function(PlannedMeal meal) onUpdate;
   final void Function(String title) onCooked;
+  final void Function(PlannedMeal meal) onRemove;
 
   const OptionsScreen({
     super.key,
@@ -222,7 +342,10 @@ class OptionsScreen extends StatefulWidget {
     required this.servings,
     required this.onRegenerate,
     required this.onPick,
+    required this.onPlan,
+    required this.onUpdate,
     required this.onCooked,
+    required this.onRemove,
   });
 
   @override
@@ -243,11 +366,22 @@ class _OptionsScreenState extends State<OptionsScreen> {
   Future<void> _pick(MealOption o) async {
     final Recipe? r = await withSpinner<Recipe>(
         context, 'Writing the recipe…', () => widget.onPick(o));
-    if (r != null && mounted) {
-      Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => RecipeScreen(recipe: r, onCooked: widget.onCooked),
-      ));
+    if (r == null || !mounted) {
+      return;
     }
+    // Selecting a meal saves it to the menu so it survives leaving this screen
+    // and closing the app — then we open its shopping list first.
+    final PlannedMeal meal = widget.onPlan(r, widget.servings);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Saved to your menu — here\'s the shopping list.')));
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => PlannedMealScreen(
+        meal: meal,
+        onUpdate: widget.onUpdate,
+        onCooked: widget.onCooked,
+        onRemove: widget.onRemove,
+      ),
+    ));
   }
 
   @override
@@ -333,6 +467,244 @@ class _OptionsScreenState extends State<OptionsScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// PLANNED MEAL — a saved meal on the menu. Shows a checkable shopping list
+// (every ingredient) so you can shop ahead, then cook it whenever. Ticks and
+// the serving count persist; cooking (or removing) clears it from the menu.
+// ═══════════════════════════════════════════════════════════════════════
+
+class PlannedMealScreen extends StatefulWidget {
+  final PlannedMeal meal;
+  final void Function(PlannedMeal meal) onUpdate;
+  final void Function(String title) onCooked;
+  final void Function(PlannedMeal meal) onRemove;
+
+  const PlannedMealScreen({
+    super.key,
+    required this.meal,
+    required this.onUpdate,
+    required this.onCooked,
+    required this.onRemove,
+  });
+
+  @override
+  State<PlannedMealScreen> createState() => _PlannedMealScreenState();
+}
+
+class _PlannedMealScreenState extends State<PlannedMealScreen> {
+  late PlannedMeal _meal = widget.meal;
+
+  void _toggle(int i) {
+    final List<bool> checked = <bool>[..._meal.checked];
+    checked[i] = !checked[i];
+    setState(() => _meal = _meal.copyWith(checked: checked));
+    widget.onUpdate(_meal);
+  }
+
+  void _setServings(int s) {
+    setState(() => _meal = _meal.copyWith(servings: s.clamp(1, 20)));
+    widget.onUpdate(_meal);
+  }
+
+  Future<void> _remove() async {
+    final bool? yes = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        backgroundColor: kCard,
+        title: Text('Remove from menu?', style: serif(size: 18)),
+        content: Text('“${_meal.recipe.title}” will be taken off your menu.',
+            style: TextStyle(color: kInk)),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Keep')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove', style: TextStyle(color: kDanger))),
+        ],
+      ),
+    );
+    if (yes == true && mounted) {
+      widget.onRemove(_meal);
+      Navigator.pop(context);
+    }
+  }
+
+  void _cooked() {
+    widget.onCooked(_meal.recipe.title);
+    widget.onRemove(_meal);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Nice — “${_meal.recipe.title}” cooked and cleared '
+            'from your menu.')));
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Recipe r = _meal.recipe;
+    final double bottomPad = 32 + MediaQuery.of(context).viewPadding.bottom;
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('On the menu', style: serif(size: 20)),
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Remove from menu',
+            icon: const Icon(Icons.delete_outline_rounded),
+            onPressed: _remove,
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: EdgeInsets.fromLTRB(20, 4, 20, bottomPad),
+        children: <Widget>[
+          Text(r.title,
+              style: serif(size: 28, weight: FontWeight.w600, height: 1.15)),
+          if (r.description.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(r.description,
+                style: serif(
+                    size: 15,
+                    weight: FontWeight.w400,
+                    color: kMuted,
+                    style: FontStyle.italic,
+                    height: 1.5)),
+          ],
+          const SizedBox(height: 18),
+          _servingsStepper(),
+          const SizedBox(height: 22),
+          Row(children: <Widget>[
+            Text('SHOPPING LIST', style: labelCaps(color: kAccent)),
+            const Spacer(),
+            if (_meal.total > 0)
+              Text('${_meal.gathered}/${_meal.total}',
+                  style: mono(
+                      size: 12,
+                      weight: FontWeight.w600,
+                      color: _meal.allGathered ? kOlive : kMuted)),
+          ]),
+          const SizedBox(height: 6),
+          if (r.ingredients.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Text('No ingredients listed.',
+                  style: TextStyle(color: kMuted, fontSize: 14)),
+            )
+          else
+            for (int i = 0; i < r.ingredients.length; i++)
+              _shoppingRow(i, r.ingredients[i]),
+          const SizedBox(height: 22),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => RecipeScreen(
+                    recipe: r,
+                    initialServings: _meal.servings,
+                    onCooked: (String title) {
+                      widget.onCooked(title);
+                      widget.onRemove(_meal);
+                    },
+                  ),
+                ),
+              ),
+              icon: const Icon(Icons.menu_book_rounded, size: 18),
+              label: const Text('View full recipe'),
+              style: OutlinedButton.styleFrom(
+                  foregroundColor: kInk,
+                  side: const BorderSide(color: kBorder),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: ElevatedButton.icon(
+              onPressed: _cooked,
+              icon: const Icon(Icons.check_rounded),
+              label: Text('I cooked this',
+                  style: serif(size: 16, weight: FontWeight.w600, color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _servingsStepper() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      decoration: BoxDecoration(
+          color: kInset, borderRadius: BorderRadius.circular(14)),
+      child: Row(children: <Widget>[
+        Text('SERVINGS', style: labelCaps()),
+        const Spacer(),
+        _roundBtn(Icons.remove_rounded, () => _setServings(_meal.servings - 1)),
+        SizedBox(
+            width: 44,
+            child: Center(
+                child: Text('${_meal.servings}',
+                    style: serif(size: 22, weight: FontWeight.w600)))),
+        _roundBtn(Icons.add_rounded, () => _setServings(_meal.servings + 1)),
+      ]),
+    );
+  }
+
+  Widget _shoppingRow(int i, RecipeIngredient ing) {
+    final bool got = _meal.checked[i];
+    return InkWell(
+      onTap: () => _toggle(i),
+      borderRadius: BorderRadius.circular(10),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 9),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Icon(
+              got
+                  ? Icons.check_box_rounded
+                  : Icons.check_box_outline_blank_rounded,
+              size: 22,
+              color: got ? kOlive : kMuted),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(ing.item,
+                style: TextStyle(
+                    fontSize: 15,
+                    color: got ? kMuted : kInk,
+                    decoration:
+                        got ? TextDecoration.lineThrough : TextDecoration.none,
+                    decorationColor: kMuted)),
+          ),
+          const SizedBox(width: 12),
+          Text(ing.scaled(_meal.factor),
+              style: mono(
+                  size: 14,
+                  weight: FontWeight.w600,
+                  color: got ? kFaint : kOlive)),
+        ]),
+      ),
+    );
+  }
+
+  Widget _roundBtn(IconData icon, VoidCallback onTap) => Material(
+        color: kCard,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Padding(
+              padding: const EdgeInsets.all(8), child: Icon(icon, size: 20)),
+        ),
+      );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // RECIPE CARD — the hero screen. Live servings scaler, cooking mode,
 // ingredients, numbered steps with per-step timers, notes.
 // ═══════════════════════════════════════════════════════════════════════
@@ -340,14 +712,20 @@ class _OptionsScreenState extends State<OptionsScreen> {
 class RecipeScreen extends StatefulWidget {
   final Recipe recipe;
   final void Function(String title) onCooked;
-  const RecipeScreen({super.key, required this.recipe, required this.onCooked});
+  final int? initialServings;
+  const RecipeScreen({
+    super.key,
+    required this.recipe,
+    required this.onCooked,
+    this.initialServings,
+  });
 
   @override
   State<RecipeScreen> createState() => _RecipeScreenState();
 }
 
 class _RecipeScreenState extends State<RecipeScreen> {
-  late int _servings = widget.recipe.baseServings;
+  late int _servings = widget.initialServings ?? widget.recipe.baseServings;
 
   double get _factor =>
       widget.recipe.baseServings == 0 ? 1 : _servings / widget.recipe.baseServings;

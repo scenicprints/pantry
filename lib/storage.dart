@@ -13,6 +13,7 @@ import 'models.dart';
 class LocalCache {
   static late File _file;
   static late File _historyFile; // cooked-meal history (chef)
+  static late File _plannedFile; // "On the menu" planned meals (chef)
 
   static Future<void> init() async {
     // systemTemp on Android = /data/user/0/<package>/cache; go up to /files/.
@@ -24,6 +25,23 @@ class LocalCache {
     }
     _file = File('${filesDir.path}/pantry_cache.json');
     _historyFile = File('${filesDir.path}/meal_history.json');
+    _plannedFile = File('${filesDir.path}/planned_meals.json');
+  }
+
+  /// Planned-meal ("On the menu") JSON, or null if none saved yet.
+  static String? loadPlanned() {
+    try {
+      if (_plannedFile.existsSync()) {
+        return _plannedFile.readAsStringSync();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static void savePlanned(String json) {
+    try {
+      _plannedFile.writeAsStringSync(json);
+    } catch (_) {}
   }
 
   /// Cooked-meal history JSON (null when the chef hasn't saved one yet).
