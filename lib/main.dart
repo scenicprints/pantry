@@ -644,29 +644,48 @@ class _PantryTabState extends State<PantryTab> {
   }
 
   Widget _filterBar(List<String> cats, String active) {
-    return SizedBox(
-      height: 46,
-      child: ListView(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        children: [
-          for (final String c in cats)
-            Padding(
-              padding: const EdgeInsets.only(right: 8),
-              child: ChoiceChip(
-                label: Text(c),
-                selected: active == c,
-                onSelected: (_) => setState(() => _filter = c),
-                showCheckmark: false,
-                backgroundColor: kCard,
-                selectedColor: kAccent.withValues(alpha: 0.18),
-                side: BorderSide(color: active == c ? kAccent : kBorder),
-                labelStyle: TextStyle(
-                    color: active == c ? kAccent : kInk,
-                    fontWeight: FontWeight.w600),
-              ),
-            ),
+    // Custom pills instead of Material ChoiceChip: a Container hugs its text
+    // with explicit padding inside a horizontal scroll, so the label can't be
+    // clipped either vertically or horizontally regardless of font metrics.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: <Widget>[
+          for (final String c in cats) _chip(c, active == c),
         ],
+      ),
+    );
+  }
+
+  Widget _chip(String c, bool selected) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Material(
+        color: selected ? kAccent.withValues(alpha: 0.18) : kCard,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: () => setState(() => _filter = c),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border:
+                    Border.all(color: selected ? kAccent : kBorder)),
+            child: Text(
+              c,
+              maxLines: 1,
+              softWrap: false,
+              overflow: TextOverflow.visible,
+              style: TextStyle(
+                  fontSize: 13.5,
+                  height: 1.0,
+                  color: selected ? kAccent : kInk,
+                  fontWeight: FontWeight.w600),
+            ),
+          ),
+        ),
       ),
     );
   }
