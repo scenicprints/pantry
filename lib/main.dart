@@ -140,21 +140,59 @@ class _HomePageState extends State<HomePage> {
 
   /// Adjust remaining amount. [add] true = bought more (raises remaining and,
   /// if it would exceed total, total too). false = used some (clamps at 0).
-  void _adjust(PantryItem item, double amount, bool add) => _mutate(() {
-        final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
-        if (i < 0) {
-          return;
-        }
-        final PantryItem it = _items[i];
-        if (add) {
+  /// When a "use" empties a tracked item it moves to the Used-up history; we
+  /// offer an Undo that restores what was there before.
+  void _adjust(PantryItem item, double amount, bool add) {
+    double? restore;
+    _mutate(() {
+      final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
+      if (i < 0) {
+        return;
+      }
+      final PantryItem it = _items[i];
+      if (add) {
+        if (it.remaining <= 0 && !it.untracked) {
+          // Restocking a used-up item: start fresh so the fill bar reads
+          // correctly instead of piling onto a stale total.
+          it.total = amount;
+          it.remaining = amount;
+        } else {
           it.remaining += amount;
           it.total += amount;
-        } else {
-          final double left = it.remaining - amount;
-          it.remaining = left < 0 ? 0 : left;
         }
-        it.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
-      });
+      } else {
+        // Capture the pre-use amount only when this use is what empties it,
+        // so the Undo restores the exact prior remaining.
+        if (it.remaining > 0 && it.remaining - amount <= 0 && !it.untracked) {
+          restore = it.remaining;
+        }
+        final double left = it.remaining - amount;
+        it.remaining = left < 0 ? 0 : left;
+      }
+      it.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+    });
+    if (restore != null) {
+      _snackUsedUp(item, restore!);
+    }
+  }
+
+  void _snackUsedUp(PantryItem item, double restore) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text('${item.name} used up — moved to History.'),
+        action: SnackBarAction(
+          label: 'Undo',
+          onPressed: () => _mutate(() {
+            final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
+            if (i >= 0) {
+              _items[i].remaining = restore;
+              _items[i].updatedAtMs = DateTime.now().millisecondsSinceEpoch;
+            }
+          }),
+        ),
+      ));
+  }
 
   void _saveQuickAdd(PantryItem item) => _mutate(() {
         _quick.removeWhere(
@@ -494,6 +532,14 @@ class PantryTab extends StatefulWidget {
 
 class _PantryTabState extends State<PantryTab> {
   String _filter = 'All';
+  final TextEditingController _search = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -501,9 +547,34 @@ class _PantryTabState extends State<PantryTab> {
     if (widget.items.isEmpty) {
       return _empty();
     }
+    final String q = _query.trim().toLowerCase();
     final bool hasSpices = widget.items.any((PantryItem i) => i.spice);
+    final bool hasUsedUp = widget.items.any((PantryItem i) => i.usedUp);
+    // Build the chip set, then fall back to All if the active filter's chip is
+    // gone (e.g. the last Used-up item got restocked while that tab was open).
+    final List<String> cats = <String>[
+      'All',
+      'Pantry',
+      if (hasSpices) 'Spices',
+      if (hasUsedUp) 'Used up',
+    ];
+    final String f = cats.contains(_filter) ? _filter : 'All';
+    bool inFilter(PantryItem i) {
+      switch (f) {
+        case 'Used up':
+          return i.usedUp;
+        case 'Pantry':
+          return !i.usedUp && i.category == 'Pantry';
+        case 'Spices':
+          return !i.usedUp && i.category == 'Spices';
+        default: // 'All' — everything still on hand
+          return !i.usedUp;
+      }
+    }
+
     final List<PantryItem> visible = widget.items
-        .where((PantryItem i) => _filter == 'All' || i.category == _filter)
+        .where((PantryItem i) =>
+            inFilter(i) && (q.isEmpty || i.name.toLowerCase().contains(q)))
         .toList()
       ..sort((PantryItem a, PantryItem b) {
         final bool ea = a.isExpiringSoon(now), eb = b.isExpiringSoon(now);
@@ -512,16 +583,19 @@ class _PantryTabState extends State<PantryTab> {
         }
         return a.name.toLowerCase().compareTo(b.name.toLowerCase());
       });
+    final bool showBar = cats.length > 2; // more than All + Pantry
     final double bottomPad = 96 + MediaQuery.of(context).viewPadding.bottom;
     return Column(children: [
-      if (hasSpices) _filterBar(),
+      _searchField(),
+      if (showBar) _filterBar(cats, f),
       Expanded(
         child: visible.isEmpty
             ? Center(
-                child: Text('Nothing in $_filter yet.',
+                child: Text(
+                    q.isNotEmpty ? 'No matches for “$_query”.' : 'Nothing in $f yet.',
                     style: TextStyle(color: kMuted)))
             : ListView.builder(
-                padding: EdgeInsets.fromLTRB(12, hasSpices ? 2 : 12, 12, bottomPad),
+                padding: EdgeInsets.fromLTRB(12, 2, 12, bottomPad),
                 itemCount: visible.length,
                 itemBuilder: (_, int i) => _row(context, visible[i], now),
               ),
@@ -529,8 +603,47 @@ class _PantryTabState extends State<PantryTab> {
     ]);
   }
 
-  Widget _filterBar() {
-    const List<String> cats = <String>['All', 'Pantry', 'Spices'];
+  Widget _searchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: TextField(
+        controller: _search,
+        onChanged: (String v) => setState(() => _query = v),
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          hintText: 'Search pantry',
+          hintStyle: TextStyle(color: kFaint),
+          prefixIcon: Icon(Icons.search_rounded, size: 20, color: kMuted),
+          suffixIcon: _query.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(Icons.close_rounded, size: 18),
+                  color: kMuted,
+                  onPressed: () {
+                    _search.clear();
+                    setState(() => _query = '');
+                    FocusScope.of(context).unfocus();
+                  },
+                ),
+          isDense: true,
+          filled: true,
+          fillColor: kCard,
+          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: kBorder)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: kBorder)),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: kAccent)),
+        ),
+      ),
+    );
+  }
+
+  Widget _filterBar(List<String> cats, String active) {
     return SizedBox(
       height: 46,
       child: ListView(
@@ -542,14 +655,14 @@ class _PantryTabState extends State<PantryTab> {
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
                 label: Text(c),
-                selected: _filter == c,
+                selected: active == c,
                 onSelected: (_) => setState(() => _filter = c),
                 showCheckmark: false,
                 backgroundColor: kCard,
                 selectedColor: kAccent.withValues(alpha: 0.18),
-                side: BorderSide(color: _filter == c ? kAccent : kBorder),
+                side: BorderSide(color: active == c ? kAccent : kBorder),
                 labelStyle: TextStyle(
-                    color: _filter == c ? kAccent : kInk,
+                    color: active == c ? kAccent : kInk,
                     fontWeight: FontWeight.w600),
               ),
             ),
@@ -612,7 +725,10 @@ class _PantryTabState extends State<PantryTab> {
               _badge('ON HAND', kOlive)
             else if (it.isCount)
               _badge('COUNT', kMuted),
-            if (expiring) _badge('EXPIRING', kWarn),
+            if (it.usedUp)
+              _badge('USED UP', kDanger)
+            else if (expiring)
+              _badge('EXPIRING', kWarn),
           ]),
           if (it.untracked) ...[
             const SizedBox(height: 8),
@@ -757,7 +873,27 @@ class _ItemSheetState extends State<ItemSheet> {
             _macro('F', m.fatG),
           ]),
         ],
-        if (!it.untracked) ...[
+        if (it.usedUp) ...[
+        const SizedBox(height: 18),
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: widget.onEdit,
+            icon: const Icon(Icons.add_rounded),
+            label: const Text('Add back to pantry'),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kAccent,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10))),
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text('Opens the full form, prefilled — set the new amount, price and '
+            'date just like a new item.',
+            style: TextStyle(fontSize: 11, color: kMuted)),
+        ] else if (!it.untracked) ...[
         const SizedBox(height: 18),
         Align(
           alignment: Alignment.centerLeft,
@@ -824,18 +960,22 @@ class _ItemSheetState extends State<ItemSheet> {
                   padding: const EdgeInsets.symmetric(vertical: 12)),
             ),
           ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: OutlinedButton.icon(
-              onPressed: widget.onEdit,
-              icon: const Icon(Icons.edit_rounded, size: 18),
-              label: const Text('Edit'),
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: kInk,
-                  side: const BorderSide(color: kBorder),
-                  padding: const EdgeInsets.symmetric(vertical: 12)),
+          // A used-up item's primary "Add back to pantry" already opens this
+          // same form, so the redundant Edit button is hidden for it.
+          if (!it.usedUp) ...[
+            const SizedBox(width: 10),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: widget.onEdit,
+                icon: const Icon(Icons.edit_rounded, size: 18),
+                label: const Text('Edit'),
+                style: OutlinedButton.styleFrom(
+                    foregroundColor: kInk,
+                    side: const BorderSide(color: kBorder),
+                    padding: const EdgeInsets.symmetric(vertical: 12)),
+              ),
             ),
-          ),
+          ],
           const SizedBox(width: 10),
           IconButton(
             onPressed: widget.onDelete,
@@ -1030,7 +1170,9 @@ class _AddItemPageState extends State<AddItemPage> {
       servingSize: _untracked ? 0 : _d(_serving),
       servingUnit: _resolvedServingUnit,
       expirationDate: _expiration,
-      dateAdded: e?.dateAdded ?? _todayStr(),
+      // Re-adding a used-up item is a fresh purchase, so stamp today; a normal
+      // edit of an in-stock item keeps its original date.
+      dateAdded: (e != null && !e.usedUp) ? e.dateAdded : _todayStr(),
       lastPrice: price,
       updatedAtMs: nowMs,
       spice: _spice,
@@ -1041,7 +1183,10 @@ class _AddItemPageState extends State<AddItemPage> {
 
   @override
   Widget build(BuildContext context) {
-    final bool editing = widget.existing != null;
+    // Editing an in-stock item shows "Edit item"; adding fresh OR re-adding a
+    // used-up item both read as "Add item".
+    final bool editing =
+        widget.existing != null && !(widget.existing!.usedUp);
     final String u = _isCount ? 'count' : 'g';
     return Scaffold(
       appBar: AppBar(

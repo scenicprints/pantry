@@ -135,6 +135,12 @@ class PantryItem {
   /// the chef treats these as available without relying on a weight.
   bool get untracked => spice || quantityUnknown;
 
+  /// True once a tracked item is fully used up. Such items leave the active
+  /// pantry and show under the "Used up" (history) filter. Derived purely from
+  /// [remaining], so restocking (remaining > 0) brings it straight back and
+  /// there's nothing extra to persist or merge. Untracked items never qualify.
+  bool get usedUp => !untracked && !deleted && remaining <= 0;
+
   /// price ÷ total — price-per-gram (weight) or price-per-unit (count).
   double get pricePer => total > 0 ? price / total : 0;
 

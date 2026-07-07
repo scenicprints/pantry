@@ -99,7 +99,8 @@ class _CookTabState extends State<CookTab> {
   int get _expiringCount {
     final DateTime now = DateTime.now();
     return widget.items
-        .where((PantryItem i) => !i.deleted && i.isExpiringSoon(now))
+        .where((PantryItem i) =>
+            !i.deleted && !i.usedUp && i.isExpiringSoon(now))
         .length;
   }
 
@@ -138,7 +139,7 @@ class _CookTabState extends State<CookTab> {
   @override
   Widget build(BuildContext context) {
     final int itemCount =
-        widget.items.where((PantryItem i) => !i.deleted).length;
+        widget.items.where((PantryItem i) => !i.deleted && !i.usedUp).length;
     final double bottomPad = 40 + MediaQuery.of(context).viewPadding.bottom;
     return ListView(
       padding: EdgeInsets.fromLTRB(20, 24, 20, bottomPad),
