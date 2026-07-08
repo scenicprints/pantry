@@ -14,6 +14,8 @@ class LocalCache {
   static late File _file;
   static late File _historyFile; // cooked-meal history (chef)
   static late File _plannedFile; // "On the menu" planned meals (chef)
+  static late File _usageFile; // spending ledger (consumption events)
+  static late File _priceBookFile; // last-known unit prices
 
   static Future<void> init() async {
     // systemTemp on Android = /data/user/0/<package>/cache; go up to /files/.
@@ -26,6 +28,40 @@ class LocalCache {
     _file = File('${filesDir.path}/pantry_cache.json');
     _historyFile = File('${filesDir.path}/meal_history.json');
     _plannedFile = File('${filesDir.path}/planned_meals.json');
+    _usageFile = File('${filesDir.path}/usage.json');
+    _priceBookFile = File('${filesDir.path}/price_book.json');
+  }
+
+  /// Spending-ledger JSON, or null if none saved yet.
+  static String? loadUsage() {
+    try {
+      if (_usageFile.existsSync()) {
+        return _usageFile.readAsStringSync();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static void saveUsage(String json) {
+    try {
+      _usageFile.writeAsStringSync(json);
+    } catch (_) {}
+  }
+
+  /// Price-book JSON, or null if none saved yet.
+  static String? loadPriceBook() {
+    try {
+      if (_priceBookFile.existsSync()) {
+        return _priceBookFile.readAsStringSync();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static void savePriceBook(String json) {
+    try {
+      _priceBookFile.writeAsStringSync(json);
+    } catch (_) {}
   }
 
   /// Planned-meal ("On the menu") JSON, or null if none saved yet.

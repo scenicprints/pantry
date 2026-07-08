@@ -12,6 +12,8 @@ import 'github_sync.dart';
 import 'label_parser.dart';
 import 'models.dart';
 import 'notifications.dart';
+import 'pricebook.dart';
+import 'spending.dart';
 import 'storage.dart';
 import 'theme.dart';
 import 'updater.dart';
@@ -56,6 +58,8 @@ class HomePage extends StatefulWidget {
 class _HomePageState extends State<HomePage> {
   List<PantryItem> _items = <PantryItem>[];
   List<QuickAddItem> _quick = <QuickAddItem>[];
+  SpendingLog _usage = const SpendingLog();
+  PriceBook _prices = const PriceBook();
   int _tab = 0;
   bool _syncing = false;
   String _syncMsg = '';
@@ -66,6 +70,12 @@ class _HomePageState extends State<HomePage> {
     final PantryData d = LocalCache.load();
     _items = d.pantry;
     _quick = d.quickAdd;
+    _usage = SpendingLog.decode(LocalCache.loadUsage());
+    // Seed the price book from what's already in the pantry so owned items are
+    // priceable immediately, even before the first remote sync.
+    _prices = PriceBook.decode(LocalCache.loadPriceBook())
+        .withPantry(_items, DateTime.now());
+    LocalCache.savePriceBook(_prices.encode());
     _syncFromRemote();
   }
 
@@ -89,12 +99,97 @@ class _HomePageState extends State<HomePage> {
     }
     final PantryData merged = PantryData.merge(remote.data, _data);
     LocalCache.save(merged, DateTime.now());
+    _items = merged.pantry;
+    _quick = merged.quickAdd;
+    // Best-effort sync of the spending ledger and price book too. Failures are
+    // ignored (they fall back to the local copy).
+    await _syncSpending();
+    await _syncPrices();
+    if (!mounted) {
+      return;
+    }
     setState(() {
-      _items = merged.pantry;
-      _quick = merged.quickAdd;
       _syncing = false;
       _syncMsg = PantrySync.canWrite ? '' : 'Read-only — write token not set.';
     });
+  }
+
+  /// Merge the remote ledger onto the local one (union by id) and, if this
+  /// build can write, push the union back.
+  Future<void> _syncSpending() async {
+    final ({SpendingLog log, String? sha})? remote = await SpendingSync.fetch();
+    if (remote == null) {
+      return;
+    }
+    SpendingLog merged = SpendingLog.merge(remote.log, _usage);
+    if (SpendingSync.canWrite) {
+      final SpendingLog? live = await SpendingSync.push(merged);
+      if (live != null) {
+        merged = live;
+      }
+    }
+    _usage = merged;
+    LocalCache.saveUsage(merged.encode());
+  }
+
+  /// Merge the remote price book with the local one, re-seed from the current
+  /// pantry, and push back when possible.
+  Future<void> _syncPrices() async {
+    final ({PriceBook book, String? sha})? remote = await PriceBookSync.fetch();
+    if (remote == null) {
+      return;
+    }
+    PriceBook merged = PriceBook.merge(remote.book, _prices)
+        .withPantry(_items, DateTime.now());
+    if (PriceBookSync.canWrite) {
+      final PriceBook? live = await PriceBookSync.push(merged);
+      if (live != null) {
+        merged = live;
+      }
+    }
+    _prices = merged;
+    LocalCache.savePriceBook(merged.encode());
+  }
+
+  /// Record a consumption event in the spending ledger. Called when the user
+  /// uses some of a tracked, priced item (the Use(−) button). Untracked or
+  /// unpriced items contribute no cost, so they're skipped.
+  Future<void> _logUsage(PantryItem item, double consumed) async {
+    if (item.untracked || consumed <= 0 || item.pricePer <= 0) {
+      return;
+    }
+    final UsageEntry e = UsageEntry.forUse(item, consumed, DateTime.now());
+    setState(() => _usage = _usage.add(e));
+    LocalCache.saveUsage(_usage.encode());
+    if (!SpendingSync.canWrite) {
+      return;
+    }
+    final SpendingLog? live = await SpendingSync.push(_usage);
+    if (!mounted || live == null) {
+      return;
+    }
+    setState(() => _usage = live);
+    LocalCache.saveUsage(_usage.encode());
+  }
+
+  /// Remember an item's current unit price (kept even after it's used up) so
+  /// the chef can price it as a future new buy.
+  Future<void> _recordPrice(PantryItem item) async {
+    final PriceBook updated = _prices.withItem(item, DateTime.now());
+    if (identical(updated, _prices)) {
+      return; // nothing priceable to record
+    }
+    setState(() => _prices = updated);
+    LocalCache.savePriceBook(_prices.encode());
+    if (!PriceBookSync.canWrite) {
+      return;
+    }
+    final PriceBook? live = await PriceBookSync.push(_prices);
+    if (!mounted || live == null) {
+      return;
+    }
+    setState(() => _prices = live);
+    LocalCache.savePriceBook(_prices.encode());
   }
 
   Future<void> _mutate(void Function() change) async {
@@ -121,14 +216,20 @@ class _HomePageState extends State<HomePage> {
 
   // ── mutations ─────────────────────────────────────────────────────────
 
-  void _addItem(PantryItem item) => _mutate(() => _items.add(item));
+  void _addItem(PantryItem item) {
+    _mutate(() => _items.add(item));
+    _recordPrice(item);
+  }
 
-  void _replaceItem(PantryItem item) => _mutate(() {
-        final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
-        if (i >= 0) {
-          _items[i] = item;
-        }
-      });
+  void _replaceItem(PantryItem item) {
+    _mutate(() {
+      final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
+      if (i >= 0) {
+        _items[i] = item;
+      }
+    });
+    _recordPrice(item);
+  }
 
   // Deletes are tombstoned (not removed) so they propagate through the merge
   // instead of being resurrected from the remote copy on the next sync.
@@ -146,6 +247,7 @@ class _HomePageState extends State<HomePage> {
   /// offer an Undo that restores what was there before.
   void _adjust(PantryItem item, double amount, bool add) {
     double? restore;
+    double consumed = 0; // amount actually used (for the spending ledger)
     _mutate(() {
       final int i = _items.indexWhere((PantryItem x) => x.id == item.id);
       if (i < 0) {
@@ -168,11 +270,16 @@ class _HomePageState extends State<HomePage> {
         if (it.remaining > 0 && it.remaining - amount <= 0 && !it.untracked) {
           restore = it.remaining;
         }
+        // Money-used = what actually left the jar (clamped at what's there).
+        consumed = amount <= it.remaining ? amount : it.remaining;
         final double left = it.remaining - amount;
         it.remaining = left < 0 ? 0 : left;
       }
       it.updatedAtMs = DateTime.now().millisecondsSinceEpoch;
     });
+    if (!add && consumed > 0) {
+      _logUsage(item, consumed);
+    }
     if (restore != null) {
       _snackUsedUp(item, restore!);
     }
@@ -437,13 +544,14 @@ class _HomePageState extends State<HomePage> {
         _quick.where((QuickAddItem q) => !q.deleted).toList();
     final List<Widget> pages = <Widget>[
       PantryTab(items: visibleItems, onTapItem: _openItem),
-      CookTab(items: visibleItems),
+      CookTab(items: visibleItems, prices: _prices),
       QuickAddTab(
           quick: visibleQuick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(
           syncing: _syncing,
           onSyncNow: _syncFromRemote,
-          itemCount: visibleItems.length),
+          itemCount: visibleItems.length,
+          spending: _usage),
     ];
 
     return Scaffold(
@@ -1611,12 +1719,14 @@ class SettingsTab extends StatelessWidget {
   final bool syncing;
   final VoidCallback onSyncNow;
   final int itemCount;
+  final SpendingLog spending;
 
   const SettingsTab({
     super.key,
     required this.syncing,
     required this.onSyncNow,
     required this.itemCount,
+    required this.spending,
   });
 
   @override
@@ -1625,6 +1735,8 @@ class SettingsTab extends StatelessWidget {
     return ListView(
       padding: EdgeInsets.fromLTRB(16, 16, 16, bottomPad),
       children: [
+        SpendingCard(log: spending),
+        const SizedBox(height: 14),
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
@@ -1684,6 +1796,134 @@ class SettingsTab extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SPENDING CARD — weekly (Sun–Sat) and monthly spend, counted by what's been
+// USED (consumed), not what was bought. A jar bought once but used over months
+// only shows cost on the weeks it's actually drawn from.
+// ═══════════════════════════════════════════════════════════════════════
+
+class SpendingCard extends StatelessWidget {
+  final SpendingLog log;
+  const SpendingCard({super.key, required this.log});
+
+  static String _m(double v) => '\$${v.toStringAsFixed(2)}';
+
+  @override
+  Widget build(BuildContext context) {
+    final DateTime now = DateTime.now();
+    final double week = log.weekTotal(now);
+    final double lastWeek = log.lastWeekTotal(now);
+    final double month = log.monthTotal(now);
+    final double lastMonth = log.lastMonthTotal(now);
+    final List<MapEntry<String, double>> top = log.topItems(
+        SpendingLog.monthStart(now), DateTime(now.year, now.month + 1, 1),
+        limit: 3);
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: kCard,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: kBorder)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Row(children: [
+          const Icon(Icons.payments_rounded, size: 16, color: kAccent),
+          const SizedBox(width: 8),
+          Text('SPENDING',
+              style: TextStyle(
+                  fontSize: 11,
+                  color: kMuted,
+                  letterSpacing: 1,
+                  fontWeight: FontWeight.w600)),
+        ]),
+        const SizedBox(height: 2),
+        Text('By what you use, not what you buy',
+            style: TextStyle(fontSize: 11, color: kFaint)),
+        const SizedBox(height: 14),
+        Row(children: [
+          Expanded(child: _stat('This week', week, 'Sun–Sat')),
+          const SizedBox(width: 12),
+          Expanded(child: _stat('This month', month, _monthLabel(now))),
+        ]),
+        const SizedBox(height: 12),
+        _deltaRow('Last week', lastWeek),
+        const SizedBox(height: 4),
+        _deltaRow('Last month', lastMonth),
+        if (top.isNotEmpty) ...[
+          const SizedBox(height: 14),
+          Text('TOP THIS MONTH',
+              style: TextStyle(
+                  fontSize: 10,
+                  color: kMuted,
+                  letterSpacing: 1,
+                  fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          for (final MapEntry<String, double> e in top) _topRow(e.key, e.value),
+        ],
+        if (log.entries.isEmpty) ...[
+          const SizedBox(height: 10),
+          Text(
+              'Nothing logged yet — costs show up here as you use items '
+              '(the − button on a pantry item).',
+              style: TextStyle(fontSize: 12, color: kMuted, height: 1.4)),
+        ],
+      ]),
+    );
+  }
+
+  Widget _stat(String label, double value, String sub) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+      decoration: BoxDecoration(
+          color: kInset, borderRadius: BorderRadius.circular(12)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: TextStyle(fontSize: 12, color: kMuted)),
+        const SizedBox(height: 6),
+        Text(_m(value),
+            style: const TextStyle(
+                fontSize: 24, fontWeight: FontWeight.w700, color: kAccent)),
+        const SizedBox(height: 2),
+        Text(sub, style: TextStyle(fontSize: 10, color: kFaint)),
+      ]),
+    );
+  }
+
+  Widget _deltaRow(String label, double value) {
+    return Row(children: [
+      Text(label, style: TextStyle(fontSize: 13, color: kMuted)),
+      const Spacer(),
+      Text(_m(value),
+          style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: kInk)),
+    ]);
+  }
+
+  Widget _topRow(String name, double value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(children: [
+        Expanded(
+            child: Text(name,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 13, color: kInk))),
+        const SizedBox(width: 10),
+        Text(_m(value),
+            style: const TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600, color: kOlive)),
+      ]),
+    );
+  }
+
+  static String _monthLabel(DateTime now) {
+    const List<String> months = <String>[
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    ];
+    return months[now.month - 1];
   }
 }
 

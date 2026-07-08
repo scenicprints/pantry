@@ -9,6 +9,7 @@ import 'chef.dart';
 import 'chef_models.dart';
 import 'models.dart';
 import 'notifications.dart';
+import 'pricebook.dart';
 import 'storage.dart';
 import 'theme.dart';
 
@@ -18,9 +19,14 @@ import 'theme.dart';
 // and per-step timers.
 // ═══════════════════════════════════════════════════════════════════════
 
+/// "$8.50" — shared money formatter for the cost estimates.
+String money(double v) => '\$${v.toStringAsFixed(2)}';
+
 class CookTab extends StatefulWidget {
   final List<PantryItem> items;
-  const CookTab({super.key, required this.items});
+  final PriceBook prices;
+  const CookTab(
+      {super.key, required this.items, this.prices = const PriceBook()});
 
   @override
   State<CookTab> createState() => _CookTabState();
@@ -112,6 +118,7 @@ class _CookTabState extends State<CookTab> {
         pantry: widget.items,
         servings: _servings,
         recentMeals: _history.recent(),
+        prices: widget.prices,
       ),
     );
     if (options == null || !mounted) {
@@ -133,6 +140,7 @@ class _CookTabState extends State<CookTab> {
         pantry: widget.items,
         servings: _servings,
         recentMeals: _history.recent(),
+        prices: widget.prices,
         request: request,
       ),
     );
@@ -154,10 +162,14 @@ class _CookTabState extends State<CookTab> {
           pantry: widget.items,
           servings: _servings,
           recentMeals: _history.recent(),
+          prices: widget.prices,
           request: request,
         ),
         onPick: (MealOption o) => Chef.generateRecipe(
-            option: o, servings: _servings, pantry: widget.items),
+            option: o,
+            servings: _servings,
+            pantry: widget.items,
+            prices: widget.prices),
         onPlan: _addPlanned,
         onUpdate: _updatePlanned,
         onCooked: _markCooked,
@@ -617,6 +629,14 @@ class _OptionsScreenState extends State<OptionsScreen> {
             Text('${_i(o.caloriesPerServing)} cal',
                 style: mono(size: 12, color: kOlive)),
           ]),
+          if (o.estCostTotal > 0) ...<Widget>[
+            const SizedBox(height: 8),
+            Text(
+                '≈ ${money(o.estCostTotal)}'
+                '${o.estCostPerServing > 0 ? '  ·  ${money(o.estCostPerServing)}/serving' : ''}'
+                '  (est.)',
+                style: mono(size: 12, weight: FontWeight.w600, color: kAccent)),
+          ],
           const SizedBox(height: 6),
           Text(
               noBuys ? 'No new buys — all from your pantry' : 'New buys: ${o.newBuys}',
@@ -747,6 +767,15 @@ class _PlannedMealScreenState extends State<PlannedMealScreen> {
                       weight: FontWeight.w600,
                       color: _meal.allGathered ? kOlive : kMuted)),
           ]),
+          if (r.estGroceryCost > 0) ...<Widget>[
+            const SizedBox(height: 6),
+            Row(children: <Widget>[
+              const Icon(Icons.shopping_cart_rounded, size: 15, color: kOlive),
+              const SizedBox(width: 6),
+              Text('This trip ≈ ${money(r.estGroceryCost * _meal.factor)} (est.)',
+                  style: mono(size: 12, weight: FontWeight.w600, color: kOlive)),
+            ]),
+          ],
           const SizedBox(height: 6),
           if (r.ingredients.isEmpty)
             Padding(
@@ -896,6 +925,45 @@ class _RecipeScreenState extends State<RecipeScreen> {
   double get _factor =>
       widget.recipe.baseServings == 0 ? 1 : _servings / widget.recipe.baseServings;
 
+  /// Cost estimate scaled to the chosen servings. Per-serving is unchanged by
+  /// scaling; the whole-meal and grocery totals scale with servings.
+  Widget _costCard(Recipe r) {
+    final double total = r.estCostTotal * _factor;
+    final double grocery = r.estGroceryCost * _factor;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+          color: kInset, borderRadius: BorderRadius.circular(14)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+        Row(children: <Widget>[
+          Text('ESTIMATED COST', style: labelCaps(color: kAccent)),
+          const Spacer(),
+          Text(money(total),
+              style: mono(size: 18, weight: FontWeight.w700, color: kAccent)),
+        ]),
+        if (r.estCostPerServing > 0) ...<Widget>[
+          const SizedBox(height: 4),
+          Text('${money(r.estCostPerServing)} per serving',
+              style: mono(size: 12, color: kMuted)),
+        ],
+        if (grocery > 0) ...<Widget>[
+          const SizedBox(height: 8),
+          Row(children: <Widget>[
+            const Icon(Icons.shopping_cart_rounded, size: 15, color: kOlive),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('Groceries to buy for this meal ≈ ${money(grocery)}',
+                  style: mono(size: 12, weight: FontWeight.w600, color: kOlive)),
+            ),
+          ]),
+        ],
+        const SizedBox(height: 6),
+        Text('Estimates from your prices + typical grocery costs.',
+            style: TextStyle(fontSize: 11, color: kFaint)),
+      ]),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final Recipe r = widget.recipe;
@@ -919,6 +987,10 @@ class _RecipeScreenState extends State<RecipeScreen> {
           const SizedBox(height: 20),
           _servingsStepper(),
           const SizedBox(height: 14),
+          if (r.estCostTotal > 0) ...<Widget>[
+            _costCard(r),
+            const SizedBox(height: 14),
+          ],
           SizedBox(
             width: double.infinity,
             height: 52,

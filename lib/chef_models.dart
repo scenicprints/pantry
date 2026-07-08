@@ -15,6 +15,8 @@ class MealOption {
   final String newBuys; // "" or "No new buys" when all from pantry
   final double proteinPerServing;
   final double caloriesPerServing;
+  final double estCostTotal; // estimated whole-meal cost (0 = not provided)
+  final double estCostPerServing; // estimated cost per serving
 
   const MealOption({
     required this.title,
@@ -23,6 +25,8 @@ class MealOption {
     required this.newBuys,
     required this.proteinPerServing,
     required this.caloriesPerServing,
+    this.estCostTotal = 0,
+    this.estCostPerServing = 0,
   });
 
   factory MealOption.fromJson(Map<String, dynamic> j) => MealOption(
@@ -32,6 +36,8 @@ class MealOption {
         newBuys: (j['newBuys'] as String?)?.trim() ?? '',
         proteinPerServing: _num(j['proteinPerServing']),
         caloriesPerServing: _num(j['caloriesPerServing']),
+        estCostTotal: _num(j['estCostTotal']),
+        estCostPerServing: _num(j['estCostPerServing']),
       );
 }
 
@@ -88,6 +94,9 @@ class Recipe {
   final List<RecipeStep> steps;
   final String notes;
   final int baseServings;
+  final double estCostTotal; // estimated cost of the whole recipe (0 = none)
+  final double estCostPerServing; // estimated cost per serving
+  final double estGroceryCost; // estimated cost of the NEW BUYS only (the trip)
 
   const Recipe({
     required this.title,
@@ -96,6 +105,9 @@ class Recipe {
     required this.steps,
     required this.notes,
     required this.baseServings,
+    this.estCostTotal = 0,
+    this.estCostPerServing = 0,
+    this.estGroceryCost = 0,
   });
 
   factory Recipe.fromJson(Map<String, dynamic> j, {required int baseServings}) =>
@@ -112,6 +124,9 @@ class Recipe {
             .toList(),
         notes: (j['notes'] as String?)?.trim() ?? '',
         baseServings: baseServings,
+        estCostTotal: _num(j['estCostTotal']),
+        estCostPerServing: _num(j['estCostPerServing']),
+        estGroceryCost: _num(j['estGroceryCost']),
       );
 
   /// Rebuild a Recipe from its own stored JSON (baseServings lives in the map).
@@ -126,6 +141,9 @@ class Recipe {
         'steps': steps.map((RecipeStep e) => e.toJson()).toList(),
         'notes': notes,
         'baseServings': baseServings,
+        'estCostTotal': estCostTotal,
+        'estCostPerServing': estCostPerServing,
+        'estGroceryCost': estGroceryCost,
       };
 }
 
