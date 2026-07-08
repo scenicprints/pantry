@@ -174,6 +174,34 @@ class SpendingLog {
   double lastMonthTotal(DateTime now) => spentBetween(
       DateTime(now.year, now.month - 1, 1), DateTime(now.year, now.month, 1));
 
+  /// Average spend per ACTIVE week (weeks that had any spend) — a stable
+  /// typical figure that isn't diluted by empty weeks before you started.
+  double averagePerWeek() =>
+      _averageByBucket((DateTime d) => weekStart(d));
+
+  /// Average spend per active month (months that had any spend).
+  double averagePerMonth() =>
+      _averageByBucket((DateTime d) => DateTime(d.year, d.month));
+
+  double _averageByBucket(DateTime Function(DateTime) bucketOf) {
+    final Map<String, double> byBucket = <String, double>{};
+    for (final UsageEntry e in entries) {
+      if (e.cost <= 0) {
+        continue;
+      }
+      final DateTime b =
+          bucketOf(DateTime.fromMillisecondsSinceEpoch(e.ts));
+      final String key = '${b.year}-${b.month}-${b.day}';
+      byBucket[key] = (byBucket[key] ?? 0) + e.cost;
+    }
+    if (byBucket.isEmpty) {
+      return 0;
+    }
+    final double total =
+        byBucket.values.fold<double>(0, (double a, double b) => a + b);
+    return _round2(total / byBucket.length);
+  }
+
   /// Total cost per item name within [start, end), highest first.
   List<MapEntry<String, double>> topItems(DateTime start, DateTime end,
       {int limit = 5}) {

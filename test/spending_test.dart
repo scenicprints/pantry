@@ -92,6 +92,40 @@ void main() {
     });
   });
 
+  group('averages (per active week / month)', () {
+    test('avg per month = total ÷ months that had spend', () {
+      final SpendingLog log = SpendingLog(<UsageEntry>[
+        _entryOn(DateTime(2026, 5, 3), 10.00), // May
+        _entryOn(DateTime(2026, 5, 20), 20.00), // May → May total 30
+        _entryOn(DateTime(2026, 7, 4), 6.00), // July → July total 6
+      ]);
+      // two active months (May=30, July=6) → (30+6)/2 = 18
+      expect(log.averagePerMonth(), 18.00);
+    });
+
+    test('avg per week = total ÷ weeks that had spend', () {
+      final SpendingLog log = SpendingLog(<UsageEntry>[
+        _entryOn(DateTime(2026, 7, 6), 4.00), // week A (Mon)
+        _entryOn(DateTime(2026, 7, 7), 6.00), // week A (Tue) → 10
+        _entryOn(DateTime(2026, 7, 15), 2.00), // week B → 2
+      ]);
+      expect(log.averagePerWeek(), 6.00); // (10 + 2) / 2
+    });
+
+    test('empty ledger averages to 0', () {
+      expect(const SpendingLog().averagePerWeek(), 0);
+      expect(const SpendingLog().averagePerMonth(), 0);
+    });
+
+    test('zero-cost entries are ignored, no divide-by-zero', () {
+      final SpendingLog log = SpendingLog(<UsageEntry>[
+        _entryOn(DateTime(2026, 7, 6), 0.00),
+      ]);
+      expect(log.averagePerWeek(), 0);
+      expect(log.averagePerMonth(), 0);
+    });
+  });
+
   group('ledger merge (append-only, union by id)', () {
     test('union keeps all distinct ids and dedupes matching ones', () {
       final SpendingLog a = SpendingLog(<UsageEntry>[

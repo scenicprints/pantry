@@ -1818,6 +1818,8 @@ class SpendingCard extends StatelessWidget {
     final double lastWeek = log.lastWeekTotal(now);
     final double month = log.monthTotal(now);
     final double lastMonth = log.lastMonthTotal(now);
+    final double avgWeek = log.averagePerWeek();
+    final double avgMonth = log.averagePerMonth();
     final List<MapEntry<String, double>> top = log.topItems(
         SpendingLog.monthStart(now), DateTime(now.year, now.month + 1, 1),
         limit: 3);
@@ -1852,6 +1854,10 @@ class SpendingCard extends StatelessWidget {
         _deltaRow('Last week', lastWeek),
         const SizedBox(height: 4),
         _deltaRow('Last month', lastMonth),
+        const SizedBox(height: 8),
+        _deltaRow('Avg / week', avgWeek, valueColor: kOlive),
+        const SizedBox(height: 4),
+        _deltaRow('Avg / month', avgMonth, valueColor: kOlive),
         if (top.isNotEmpty) ...[
           const SizedBox(height: 14),
           Text('TOP THIS MONTH',
@@ -1891,13 +1897,13 @@ class SpendingCard extends StatelessWidget {
     );
   }
 
-  Widget _deltaRow(String label, double value) {
+  Widget _deltaRow(String label, double value, {Color valueColor = kInk}) {
     return Row(children: [
       Text(label, style: TextStyle(fontSize: 13, color: kMuted)),
       const Spacer(),
       Text(_m(value),
-          style: const TextStyle(
-              fontSize: 13, fontWeight: FontWeight.w600, color: kInk)),
+          style: TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w600, color: valueColor)),
     ]);
   }
 
