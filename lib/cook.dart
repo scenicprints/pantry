@@ -309,10 +309,6 @@ class _CookTabState extends State<CookTab> {
                     borderRadius: BorderRadius.circular(14))),
           ),
         ),
-        const SizedBox(height: 8),
-        Text('Describe a specific craving — say, what your wife\'s after — and '
-            'I\'ll tailor three ideas to it.',
-            style: TextStyle(color: kMuted, fontSize: 12, height: 1.4)),
       ],
     );
   }

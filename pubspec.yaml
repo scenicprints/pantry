@@ -5,7 +5,7 @@ publish_to: 'none'
 # Version is the single source of truth for the app's version.
 # publish.ps1 bumps this; the in-app updater compares it to the latest
 # GitHub Release. (Mirrors the BodyComp pipeline.)
-version: 0.8.0+14
+version: 0.8.1+15
 
 environment:
   sdk: ^3.9.0
