@@ -84,23 +84,44 @@ class Chef {
   static const String _endpoint = 'https://api.anthropic.com/v1/messages';
 
   // ── Call 1: three options ─────────────────────────────────────────────
+  // [request], when given, is a free-text craving/description (e.g. from the
+  // wife) — the 3 options are then tailored to it instead of protein-varied.
   static Future<List<MealOption>> generateOptions({
     required List<PantryItem> pantry,
     required int servings,
     required List<String> recentMeals,
+    String? request,
   }) async {
+    final String req = request?.trim() ?? '';
+    final bool hasReq = req.isNotEmpty;
+
+    final String task = hasReq
+        ? '''
+The user has a SPECIFIC REQUEST for this meal:
+"$req"
+
+Propose exactly 3 options that satisfy this request as closely as possible while
+still obeying EVERY hard rule (allergy, dislikes, accepted proteins only). The 3
+options should be genuinely different takes on what was asked — vary the flavor,
+sides, or preparation — but they do NOT need to use different proteins if the
+request points to one. Use pantry items where they fit; new buys are expected
+and fine to fulfil the request. Only prioritize an [EXPIRING SOON] item if it
+suits the request.'''
+        : '''
+Propose exactly 3 dinner options. Each option MUST use a DIFFERENT protein from
+the accepted list. Prioritize any [EXPIRING SOON] ingredient. Options must be
+genuinely different from each other. Follow every hard rule.''';
+
     final String user = '''
 CURRENT PANTRY (what's in stock — [EXPIRING SOON] items must be prioritized):
 ${formatPantry(pantry)}
 
-RECENTLY MADE — do NOT repeat any of these:
+RECENTLY MADE${hasReq ? ' (context only — you MAY reuse one if it matches the request)' : ' — do NOT repeat any of these'}:
 ${recentMeals.isEmpty ? '(none yet)' : recentMeals.map((String m) => '- $m').join('\n')}
 
 Cooking for $servings ${servings == 1 ? 'person' : 'people'}.
 
-Propose exactly 3 dinner options. Each option MUST use a DIFFERENT protein from
-the accepted list. Prioritize any [EXPIRING SOON] ingredient. Options must be
-genuinely different from each other. Follow every hard rule.
+$task
 
 The pantry above is the COMPLETE list of what the user has. Everything else —
 including any protein, oil, spice, or staple — is a NEW BUY. Do not claim the

@@ -32,6 +32,39 @@ class OpenFoodFacts {
     'User-Agent': 'Pantry/0.1 (github.com/scenicprints/pantry)',
   };
 
+  /// Search products by name. Returns up to ~25 matches that have usable
+  /// calorie data (others are dropped). Empty list on any failure.
+  static Future<List<ProductInfo>> search(String query) async {
+    final String q = query.trim();
+    if (q.isEmpty) {
+      return <ProductInfo>[];
+    }
+    final Uri uri = Uri.parse(
+        'https://world.openfoodfacts.org/cgi/search.pl'
+        '?search_terms=${Uri.encodeQueryComponent(q)}'
+        '&search_simple=1&action=process&json=1&page_size=25'
+        '&fields=product_name,brands,nutriments,serving_size,quantity,code');
+    final http.Response resp = await http.get(uri, headers: _headers).timeout(
+          const Duration(seconds: 20),
+        );
+    if (resp.statusCode != 200) {
+      return <ProductInfo>[];
+    }
+    final Map<String, dynamic> data =
+        jsonDecode(resp.body) as Map<String, dynamic>;
+    final List<dynamic> products =
+        (data['products'] as List<dynamic>?) ?? <dynamic>[];
+    final List<ProductInfo> out = <ProductInfo>[];
+    for (final Map<String, dynamic> p
+        in products.whereType<Map<String, dynamic>>()) {
+      final ProductInfo? info = _parse(p, p['code'] as String?);
+      if (info != null) {
+        out.add(info);
+      }
+    }
+    return out;
+  }
+
   /// Look up a barcode. Returns null if not found / no usable nutrition.
   static Future<ProductInfo?> fetchByBarcode(String barcode) async {
     final Uri uri = Uri.parse(

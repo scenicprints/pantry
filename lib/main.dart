@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
@@ -264,6 +266,30 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  Future<void> _addBySearch() async {
+    final ProductInfo? info = await Navigator.of(context).push(
+      MaterialPageRoute<ProductInfo>(builder: (_) => const FoodSearchPage()),
+    );
+    if (info == null || !mounted) {
+      return;
+    }
+    // Open Food Facts is per-100 g. Convert to per-serving using the product's
+    // serving grams when known; otherwise present a 100 g serving.
+    final double sg = (info.servingGrams != null && info.servingGrams! > 0)
+        ? info.servingGrams!
+        : 100;
+    _startAdd(
+      prefill: AddPrefill(
+        name: info.name,
+        barcode: info.barcode,
+        macros: info.macrosPer100g.scale(sg / 100),
+        servingSize: sg,
+        servingUnit: 'g',
+        total: info.packGrams,
+      ),
+    );
+  }
+
   Future<void> _addByLabel() async {
     XFile? shot;
     try {
@@ -364,6 +390,11 @@ class _HomePageState extends State<HomePage> {
       builder: (_) => SafeArea(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const SizedBox(height: 8),
+          _menuTile(Icons.search_rounded, 'Search foods',
+              'Find macros by name (Open Food Facts)', () {
+            Navigator.pop(context);
+            _addBySearch();
+          }),
           _menuTile(Icons.qr_code_scanner_rounded, 'Scan barcode',
               'Look up macros from Open Food Facts', () {
             Navigator.pop(context);
@@ -1732,6 +1763,168 @@ class _ScanPageState extends State<ScanPage> {
               style: TextStyle(color: kMuted)),
         ),
       ]),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// FOOD SEARCH — find a product by name (Open Food Facts), pick one to prefill
+// the Add form. Returns the chosen ProductInfo (per-100 g macros) on pop.
+// ═══════════════════════════════════════════════════════════════════════
+
+class FoodSearchPage extends StatefulWidget {
+  const FoodSearchPage({super.key});
+
+  @override
+  State<FoodSearchPage> createState() => _FoodSearchPageState();
+}
+
+class _FoodSearchPageState extends State<FoodSearchPage> {
+  final TextEditingController _q = TextEditingController();
+  Timer? _debounce;
+  int _reqId = 0; // guards against out-of-order responses
+  bool _loading = false;
+  bool _searched = false;
+  List<ProductInfo> _results = <ProductInfo>[];
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _q.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String v) {
+    _debounce?.cancel();
+    if (v.trim().length < 2) {
+      setState(() {
+        _results = <ProductInfo>[];
+        _searched = false;
+        _loading = false;
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 450), () => _run(v));
+  }
+
+  Future<void> _run(String v) async {
+    final int id = ++_reqId;
+    setState(() {
+      _loading = true;
+      _searched = true;
+    });
+    List<ProductInfo> res = <ProductInfo>[];
+    try {
+      res = await OpenFoodFacts.search(v);
+    } catch (_) {}
+    if (!mounted || id != _reqId) {
+      return; // a newer query superseded this one
+    }
+    setState(() {
+      _results = res;
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double bottomPad = 16 + MediaQuery.of(context).viewPadding.bottom;
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: kBg,
+        elevation: 0,
+        title: const Text('Search foods'),
+      ),
+      body: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: TextField(
+            controller: _q,
+            autofocus: true,
+            textInputAction: TextInputAction.search,
+            onChanged: _onChanged,
+            onSubmitted: (String v) {
+              _debounce?.cancel();
+              if (v.trim().length >= 2) {
+                _run(v);
+              }
+            },
+            decoration: _dec('e.g. greek yogurt, chicken breast').copyWith(
+              prefixIcon: Icon(Icons.search_rounded, color: kMuted),
+              suffixIcon: _q.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const Icon(Icons.close_rounded, size: 18),
+                      color: kMuted,
+                      onPressed: () {
+                        _q.clear();
+                        _onChanged('');
+                        setState(() {});
+                      },
+                    ),
+            ),
+          ),
+        ),
+        Expanded(child: _body(bottomPad)),
+      ]),
+    );
+  }
+
+  Widget _body(double bottomPad) {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator(color: kAccent));
+    }
+    if (!_searched) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text('Type a food name to search Open Food Facts.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
+        ),
+      );
+    }
+    if (_results.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Text('No matches. Try a different name, or scan the '
+              'barcode / label instead.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: EdgeInsets.fromLTRB(12, 4, 12, bottomPad),
+      itemCount: _results.length,
+      itemBuilder: (_, int i) => _resultRow(_results[i]),
+    );
+  }
+
+  Widget _resultRow(ProductInfo p) {
+    final Macros m = p.macrosPer100g;
+    return GestureDetector(
+      onTap: () => Navigator.pop(context, p),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: kBorder)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(p.name,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 6),
+          Text(
+              'per 100 g · ${m.calories.round()} cal · '
+              '${_fmt(m.proteinG)}p / ${_fmt(m.carbsG)}c / ${_fmt(m.fatG)}f',
+              style: TextStyle(fontSize: 12, color: kMuted)),
+        ]),
+      ),
     );
   }
 }

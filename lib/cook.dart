@@ -117,14 +117,44 @@ class _CookTabState extends State<CookTab> {
     if (options == null || !mounted) {
       return;
     }
+    _openOptions(options, null);
+  }
+
+  /// "Cook a request" — describe a craving, get 3 tailored options.
+  Future<void> _cookRequest() async {
+    final String? request = await _askRequest();
+    if (request == null || request.trim().isEmpty || !mounted) {
+      return;
+    }
+    final List<MealOption>? options = await withSpinner<List<MealOption>>(
+      context,
+      'Tailoring 3 ideas…',
+      () => Chef.generateOptions(
+        pantry: widget.items,
+        servings: _servings,
+        recentMeals: _history.recent(),
+        request: request,
+      ),
+    );
+    if (options == null || !mounted) {
+      return;
+    }
+    _openOptions(options, request);
+  }
+
+  // Shared: open the 3-options screen. [request] carries the craving through
+  // so "Three different ideas" regenerates in the same mode.
+  void _openOptions(List<MealOption> options, String? request) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => OptionsScreen(
         options: options,
         servings: _servings,
+        request: request,
         onRegenerate: () => Chef.generateOptions(
           pantry: widget.items,
           servings: _servings,
           recentMeals: _history.recent(),
+          request: request,
         ),
         onPick: (MealOption o) => Chef.generateRecipe(
             option: o, servings: _servings, pantry: widget.items),
@@ -134,6 +164,91 @@ class _CookTabState extends State<CookTab> {
         onRemove: _removePlanned,
       ),
     ));
+  }
+
+  Future<String?> _askRequest() async {
+    final TextEditingController c = TextEditingController();
+    final String? result = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: kCard,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(18))),
+      builder: (BuildContext ctx) => Padding(
+        padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom +
+                MediaQuery.of(ctx).viewPadding.bottom +
+                20),
+        child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                      color: kBorder, borderRadius: BorderRadius.circular(2))),
+              Text('What are you in the mood for?',
+                  style: serif(size: 22, weight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text('Describe it however you like — a craving, a cuisine, a '
+                  'dish, a vibe. I\'ll tailor three ideas to it.',
+                  style: TextStyle(color: kMuted, fontSize: 13, height: 1.4)),
+              const SizedBox(height: 16),
+              TextField(
+                controller: c,
+                autofocus: true,
+                minLines: 2,
+                maxLines: 4,
+                textCapitalization: TextCapitalization.sentences,
+                style: TextStyle(color: kInk, fontSize: 15),
+                decoration: InputDecoration(
+                  hintText: 'e.g. something cozy with chicken, taco night, '
+                      'a light Italian dish…',
+                  hintStyle: TextStyle(color: kFaint),
+                  filled: true,
+                  fillColor: kInset,
+                  contentPadding: const EdgeInsets.all(14),
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: kBorder)),
+                  enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: kBorder)),
+                  focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: kAccent)),
+                ),
+                onSubmitted: (String v) => Navigator.pop(ctx, v.trim()),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.pop(ctx, c.text.trim()),
+                  icon: const Icon(Icons.auto_awesome_rounded, size: 18),
+                  label: Text('Get 3 ideas',
+                      style: serif(
+                          size: 16,
+                          weight: FontWeight.w600,
+                          color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                      backgroundColor: kAccent,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12))),
+                ),
+              ),
+            ]),
+      ),
+    );
+    c.dispose();
+    return result;
   }
 
   @override
@@ -176,6 +291,28 @@ class _CookTabState extends State<CookTab> {
                     borderRadius: BorderRadius.circular(14))),
           ),
         ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: ElevatedButton.icon(
+            onPressed: _hasKey ? _cookRequest : null,
+            icon: const Icon(Icons.favorite_rounded),
+            label: Text('Wife\'s Request',
+                style: serif(
+                    size: 17, weight: FontWeight.w600, color: Colors.white)),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kOlive,
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: kBorder,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14))),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text('Describe a specific craving — say, what your wife\'s after — and '
+            'I\'ll tailor three ideas to it.',
+            style: TextStyle(color: kMuted, fontSize: 12, height: 1.4)),
       ],
     );
   }
@@ -330,6 +467,7 @@ class _CookTabState extends State<CookTab> {
 class OptionsScreen extends StatefulWidget {
   final List<MealOption> options;
   final int servings;
+  final String? request; // the craving, when these came from "Cook a request"
   final Future<List<MealOption>> Function() onRegenerate;
   final Future<Recipe> Function(MealOption) onPick;
   final PlannedMeal Function(Recipe recipe, int servings) onPlan;
@@ -341,6 +479,7 @@ class OptionsScreen extends StatefulWidget {
     super.key,
     required this.options,
     required this.servings,
+    this.request,
     required this.onRegenerate,
     required this.onPick,
     required this.onPlan,
@@ -388,12 +527,42 @@ class _OptionsScreenState extends State<OptionsScreen> {
   @override
   Widget build(BuildContext context) {
     final double bottomPad = 24 + MediaQuery.of(context).viewPadding.bottom;
+    final String? request = widget.request?.trim();
+    final bool hasReq = request != null && request.isNotEmpty;
     return Scaffold(
-      appBar: AppBar(title: Text('Tonight', style: serif(size: 20))),
+      appBar: AppBar(
+          title: Text(hasReq ? 'Wife\'s Request' : 'Tonight',
+              style: serif(size: 20))),
       body: ListView(
         padding: EdgeInsets.fromLTRB(16, 8, 16, bottomPad),
         children: <Widget>[
-          Text('Pick one — each uses a different protein.',
+          if (hasReq) ...<Widget>[
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                  color: kOlive.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: kOlive.withValues(alpha: 0.4))),
+              child: Row(children: <Widget>[
+                const Icon(Icons.favorite_rounded, color: kOlive, size: 16),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text('“$request”',
+                      style: serif(
+                          size: 14,
+                          weight: FontWeight.w400,
+                          color: kInk,
+                          style: FontStyle.italic,
+                          height: 1.3)),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 14),
+          ],
+          Text(
+              hasReq
+                  ? 'Three takes on what you asked for — pick one.'
+                  : 'Pick one — each uses a different protein.',
               style: TextStyle(color: kMuted, fontSize: 13)),
           const SizedBox(height: 14),
           for (final MealOption o in _options) _card(o),
