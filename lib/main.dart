@@ -55,7 +55,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   List<PantryItem> _items = <PantryItem>[];
   List<QuickAddItem> _quick = <QuickAddItem>[];
   SpendingLog _usage = const SpendingLog();
@@ -63,10 +63,16 @@ class _HomePageState extends State<HomePage> {
   int _tab = 0;
   bool _syncing = false;
   String _syncMsg = '';
+  // A change was saved locally but its upload to GitHub hasn't confirmed yet.
+  // While true, a timer keeps retrying so a new item reaches the shared file
+  // (that BodyComp reads) within seconds instead of waiting for the next open.
+  bool _pendingPush = false;
+  Timer? _retryTimer;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final PantryData d = LocalCache.load();
     _items = d.pantry;
     _quick = d.quickAdd;
@@ -77,6 +83,50 @@ class _HomePageState extends State<HomePage> {
         .withPantry(_items, DateTime.now());
     LocalCache.savePriceBook(_prices.encode());
     _syncFromRemote();
+  }
+
+  @override
+  void dispose() {
+    _retryTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Coming back to the app is a good moment to flush anything that didn't sync
+  // and pull whatever changed elsewhere.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncFromRemote();
+    }
+  }
+
+  /// While a push is pending, retry it every 20 s until it lands. Cheap, and it
+  /// closes the window where a freshly-added item is invisible to other apps.
+  void _scheduleRetry() {
+    _retryTimer ??=
+        Timer.periodic(const Duration(seconds: 20), (_) => _retryPush());
+  }
+
+  Future<void> _retryPush() async {
+    if (!_pendingPush || !PantrySync.canWrite) {
+      _retryTimer?.cancel();
+      _retryTimer = null;
+      return;
+    }
+    final PantryData? live = await PantrySync.push(_data, DateTime.now());
+    if (!mounted || live == null) {
+      return; // still failing — the timer will try again
+    }
+    _retryTimer?.cancel();
+    _retryTimer = null;
+    setState(() {
+      _items = live.pantry;
+      _quick = live.quickAdd;
+      _pendingPush = false;
+      _syncMsg = '';
+    });
+    LocalCache.save(live, DateTime.now());
   }
 
   PantryData get _data => PantryData(pantry: _items, quickAdd: _quick);
@@ -97,10 +147,29 @@ class _HomePageState extends State<HomePage> {
       });
       return;
     }
+    final DateTime now = DateTime.now();
     final PantryData merged = PantryData.merge(remote.data, _data);
-    LocalCache.save(merged, DateTime.now());
+    LocalCache.save(merged, now);
     _items = merged.pantry;
     _quick = merged.quickAdd;
+    // If the merged copy differs from what's on GitHub, we hold local-only
+    // changes (e.g. an add whose first upload failed). Push them now so the
+    // shared file — and BodyComp — sees them. This also recovers a pending
+    // change after an app restart, where the in-memory flag was lost.
+    final bool hasLocalChanges =
+        merged.encode(now) != remote.data.encode(now);
+    if (PantrySync.canWrite && (hasLocalChanges || _pendingPush)) {
+      final PantryData? live = await PantrySync.push(merged, now);
+      if (live != null) {
+        _items = live.pantry;
+        _quick = live.quickAdd;
+        _pendingPush = false;
+        LocalCache.save(live, now);
+      } else {
+        _pendingPush = true;
+        _scheduleRetry();
+      }
+    }
     // Best-effort sync of the spending ledger and price book too. Failures are
     // ignored (they fall back to the local copy).
     await _syncSpending();
@@ -110,7 +179,9 @@ class _HomePageState extends State<HomePage> {
     }
     setState(() {
       _syncing = false;
-      _syncMsg = PantrySync.canWrite ? '' : 'Read-only — write token not set.';
+      _syncMsg = !PantrySync.canWrite
+          ? 'Read-only — write token not set.'
+          : (_pendingPush ? 'Change saved — still syncing…' : '');
     });
   }
 
@@ -208,9 +279,15 @@ class _HomePageState extends State<HomePage> {
       if (live != null) {
         _items = live.pantry;
         _quick = live.quickAdd;
+        _pendingPush = false;
+      } else {
+        // Upload didn't land — keep retrying in the background so the change
+        // reaches the shared file without waiting for the next app open.
+        _pendingPush = true;
+        _scheduleRetry();
       }
       _syncing = false;
-      _syncMsg = live == null ? 'Change saved locally — will sync later.' : '';
+      _syncMsg = live == null ? 'Change saved — still syncing…' : '';
     });
   }
 
