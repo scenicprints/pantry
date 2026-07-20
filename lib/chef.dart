@@ -27,6 +27,71 @@ const String kChefModelHaiku = 'claude-haiku-4-5';
 const String kChefModelSonnet = 'claude-sonnet-4-6';
 const String kChefModelOpus = 'claude-opus-4-8';
 
+// ═══════════════════════════════════════════════════════════════════════
+// EQUIPMENT — what the user actually cooks with. The chef used to have this
+// hard-coded; now it's picked in Settings and injected into every prompt, so
+// recipes only ever use appliances that exist in this kitchen.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// One appliance. [note] carries capability knowledge worth telling the chef
+/// — only for devices where it genuinely changes how a recipe is written.
+class CookDevice {
+  final String name;
+  final String? note;
+  const CookDevice(this.name, [this.note]);
+}
+
+const List<CookDevice> kKnownDevices = <CookDevice>[
+  CookDevice('Air fryer'),
+  CookDevice('Stove / cooktop'),
+  CookDevice('Oven'),
+  CookDevice(
+      'Tovala Smart Oven',
+      'countertop smart oven with Steam, Bake, Broil, Air Fry, Toast and '
+          'Reheat. Its edge is STEAM and multi-mode cycles: up to 3 modes '
+          'chained in one automated cook (e.g. Steam → Bake → Broil), each '
+          'with its own time and temperature. Steam keeps lean proteins juicy '
+          'and revives leftovers without drying them; finish on Broil to '
+          'brown. Small capacity — single layer, batch if needed'),
+  CookDevice('Toaster oven'),
+  CookDevice('Microwave'),
+  CookDevice('Outdoor grill'),
+  CookDevice('Smoker'),
+  CookDevice('Slow cooker (Crock-Pot)'),
+  CookDevice('Pressure cooker (Instant Pot)'),
+  CookDevice('Sous vide'),
+  CookDevice('Rice cooker'),
+  CookDevice('Griddle / flat top'),
+  CookDevice('Deep fryer'),
+  CookDevice('Blender'),
+  CookDevice('Immersion blender'),
+  CookDevice('Food processor'),
+  CookDevice('Stand mixer'),
+  CookDevice('Waffle iron'),
+  CookDevice('Panini press'),
+  CookDevice('Toaster'),
+];
+
+/// Sensible starting kitchen — what the user said they have. Only used until
+/// they change it in Settings.
+const List<String> kDefaultDevices = <String>[
+  'Air fryer',
+  'Stove / cooktop',
+  'Oven',
+  'Tovala Smart Oven',
+  'Outdoor grill',
+];
+
+/// Capability note for [name], or null (covers custom devices too).
+String? deviceNote(String name) {
+  for (final CookDevice d in kKnownDevices) {
+    if (d.name == name) {
+      return d.note;
+    }
+  }
+  return null;
+}
+
 class ChefException implements Exception {
   final String message;
   ChefException(this.message);
@@ -39,6 +104,7 @@ class ChefKeys {
   static const FlutterSecureStorage _s = FlutterSecureStorage();
   static const String _kKey = 'chef_api_key';
   static const String _kModel = 'chef_model'; // 'haiku' | 'sonnet' | 'opus'
+  static const String _kEquipment = 'chef_equipment'; // JSON list of devices
 
   /// Key baked in at build time via --dart-define=ANTHROPIC_API_KEY=… (a
   /// GitHub Actions secret; shared with BodyComp). A user-entered key
@@ -69,6 +135,25 @@ class ChefKeys {
       (await _s.read(key: _kModel)) ?? 'haiku';
   static Future<void> setModelPref(String p) => _s.write(key: _kModel, value: p);
 
+  /// The appliances the user owns. Falls back to [kDefaultDevices] until they
+  /// pick their own in Settings.
+  static Future<List<String>> getEquipment() async {
+    final String? raw = await _s.read(key: _kEquipment);
+    if (raw == null || raw.isEmpty) {
+      return List<String>.from(kDefaultDevices);
+    }
+    try {
+      final dynamic d = jsonDecode(raw);
+      if (d is List) {
+        return d.whereType<String>().toList();
+      }
+    } catch (_) {}
+    return List<String>.from(kDefaultDevices);
+  }
+
+  static Future<void> setEquipment(List<String> devices) =>
+      _s.write(key: _kEquipment, value: jsonEncode(devices));
+
   static Future<String> getModelId() async {
     switch (await getModelPref()) {
       case 'opus':
@@ -97,6 +182,7 @@ class Chef {
     final String req = request?.trim() ?? '';
     final bool hasReq = req.isNotEmpty;
     final String knownPrices = formatKnownPrices(prices, pantry);
+    final String equipment = formatEquipment(await ChefKeys.getEquipment());
 
     final String task = hasReq
         ? '''
@@ -124,6 +210,10 @@ ${knownPrices.isEmpty ? '' : '''
 KNOWN PRICES (the user has bought these before — use these exact unit prices if
 a meal needs them as new buys):
 $knownPrices'''}
+
+EQUIPMENT — the ONLY appliances in this kitchen. Never propose a meal that
+needs anything not on this list:
+$equipment
 
 RECENTLY MADE${hasReq ? ' (context only — you MAY reuse one if it matches the request)' : ' — do NOT repeat any of these'}:
 ${recentMeals.isEmpty ? '(none yet)' : recentMeals.map((String m) => '- $m').join('\n')}
@@ -166,6 +256,7 @@ fields are numbers in dollars (e.g. 8.50).''';
     PriceBook prices = const PriceBook(),
   }) async {
     final String knownPrices = formatKnownPrices(prices, pantry);
+    final String equipment = formatEquipment(await ChefKeys.getEquipment());
     final String user = '''
 Write the full recipe for "${option.title}" (${option.desc}) for $servings
 ${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
@@ -179,6 +270,10 @@ ${knownPrices.isEmpty ? '' : '''
 
 KNOWN PRICES (bought before — use these exact unit prices for these new buys):
 $knownPrices'''}
+
+EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
+with these; never instruct the user to use anything else:
+$equipment
 
 For every ingredient NOT in that pantry list, append " (new buy)" to its name in
 the ingredients list. Do not imply the user already has anything not listed.
@@ -382,6 +477,22 @@ new buys, and storage/pro tips. Cost fields are numbers in dollars (e.g. 12.75).
     return sb.toString().trimRight();
   }
 
+  /// The user's appliances, one per line, with a capability note where it
+  /// changes how the dish should be cooked (e.g. the Tovala's steam cycles).
+  static String formatEquipment(List<String> owned) {
+    final List<String> live =
+        owned.where((String s) => s.trim().isNotEmpty).toList();
+    if (live.isEmpty) {
+      return '- Stove / cooktop\n- Oven  (nothing else specified)';
+    }
+    final StringBuffer sb = StringBuffer();
+    for (final String name in live) {
+      final String? note = deviceNote(name);
+      sb.writeln(note == null ? '- $name' : '- $name — $note');
+    }
+    return sb.toString().trimRight();
+  }
+
   /// "$0.012/g" or "$0.25 each"; empty when there's no price.
   static String _priceLabel(double unitPrice, bool isCount) {
     if (unitPrice <= 0) {
@@ -416,7 +527,11 @@ USER PROFILE (hard rules — never violate):
   * Beef — ground, cube steak, flank/skirt steak.
   * Ground turkey.
   * Firm tofu.
-- Equipment: air fryer, oven, stove, toaster oven.
+- EQUIPMENT: the user message lists the appliances this kitchen actually has.
+  That list is the complete truth — treat anything not on it as unavailable.
+  Never write a step that requires a missing appliance; adapt the method to
+  what IS available (or pick a different dish). Where a listed device has a
+  capability note, use it — it's there because it changes how to cook.
 - Goals: weight loss, high protein, low calorie, superfoods, more energy.
 - Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
 
@@ -503,6 +618,20 @@ AIR FRYER REFERENCE (use this knowledge):
 - Corn on the cob: 10-12 min @ 200C/400F, turn halfway
 - Pigs in a blanket: 8-10 min @ 200C/400F
 - Always: single layer, don't overcrowd, shake/flip halfway.
+
+TOVALA SMART OVEN REFERENCE (use ONLY if it's listed in EQUIPMENT):
+- Modes: Steam, Bake, Broil, Air Fry, Toast, Reheat.
+- Its real advantage is chaining up to 3 modes into ONE automated cycle, each
+  step with its own temperature and time. Write these as a single step, e.g.
+  "Tovala cycle: Steam 5 min -> Bake 425F 12 min -> Broil Hi 3 min".
+- Steam first, brown last. Steam keeps lean proteins (chicken breast, turkey,
+  fish the user can eat, tofu) juicy and cooks vegetables vibrant; a short
+  Broil at the end gives colour and crisp edges.
+- Steam also reheats leftovers without drying them — better than a microwave.
+- Broil has Hi and Lo. Toast has 5 shades.
+- Capacity is countertop-sized: single layer, don't crowd, batch if needed.
+- Don't use it as a plain oven when a steam->bake->broil cycle would cook the
+  same dish better.
 
 STANDARD BREADING STATION: flour (seasoned) -> beaten egg -> breadcrumb +
 parmesan mix.

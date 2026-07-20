@@ -1403,6 +1403,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
   bool _obscure = true;
   bool _hasUserKey = false;
   String _model = 'haiku';
+  List<String> _equipment = <String>[];
 
   static const Map<String, String> _modelCost = <String, String>{
     'haiku': 'Fast & cheap — under \$0.01 per meal. Recommended.',
@@ -1423,6 +1424,80 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
         setState(() => _model = p);
       }
     }).catchError((Object _) {});
+    ChefKeys.getEquipment().then((List<String> v) {
+      if (mounted) {
+        setState(() => _equipment = v);
+      }
+    }).catchError((Object _) {});
+  }
+
+  // ── equipment ─────────────────────────────────────────────────────────
+
+  /// Devices the user typed in themselves (anything not in the catalog).
+  List<String> get _customDevices {
+    final Set<String> known =
+        kKnownDevices.map((CookDevice d) => d.name).toSet();
+    return _equipment.where((String s) => !known.contains(s)).toList();
+  }
+
+  void _toggleDevice(String name) {
+    setState(() {
+      _equipment = _equipment.contains(name)
+          ? _equipment.where((String s) => s != name).toList()
+          : <String>[..._equipment, name];
+    });
+    ChefKeys.setEquipment(_equipment);
+  }
+
+  Future<void> _addCustomDevice() async {
+    final TextEditingController c = TextEditingController();
+    final String? entered = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        backgroundColor: kCard,
+        title: Text('Add equipment', style: serif(size: 19)),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(
+            hintText: 'e.g. Pizza oven',
+            hintStyle: TextStyle(color: kFaint),
+            filled: true,
+            fillColor: kInset,
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kBorder)),
+          ),
+          onSubmitted: (String v) => Navigator.pop(ctx, v),
+        ),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: TextStyle(color: kMuted))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, c.text),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kAccent, foregroundColor: Colors.white),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    final String name = (entered ?? '').trim();
+    if (name.isEmpty || _equipment.contains(name)) {
+      return;
+    }
+    setState(() => _equipment = <String>[..._equipment, name]);
+    ChefKeys.setEquipment(_equipment);
+  }
+
+  void _removeCustomDevice(String name) {
+    setState(() =>
+        _equipment = _equipment.where((String s) => s != name).toList());
+    ChefKeys.setEquipment(_equipment);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('Removed $name.')));
   }
 
   @override
@@ -1552,11 +1627,90 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
         const SizedBox(height: 6),
         Text(_modelCost[_model] ?? '',
             style: TextStyle(fontSize: 12, color: kMuted)),
+        const SizedBox(height: 18),
+        Text('MY KITCHEN', style: labelCaps(color: kMuted)),
+        const SizedBox(height: 4),
+        Text('Tap what you own. The chef only cooks with these.',
+            style: TextStyle(fontSize: 11, color: kFaint)),
         const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            for (final CookDevice d in kKnownDevices) _deviceChip(d.name),
+            for (final String c in _customDevices)
+              _deviceChip(c, custom: true),
+            _addChip(),
+          ],
+        ),
+        if (_customDevices.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          Text('Long-press one you added to remove it.',
+              style: TextStyle(fontSize: 11, color: kFaint)),
+        ],
+        const SizedBox(height: 16),
         Text('Calls the Claude API directly. Billing is pay-as-you-go and '
             'separate from any Claude.ai subscription.',
             style: TextStyle(fontSize: 11, color: kFaint, height: 1.4)),
       ]),
+    );
+  }
+
+  /// Self-sizing pill (not a Material ChoiceChip — those clip their label in a
+  /// constrained row; see the v0.6.1 filter-chip fix).
+  Widget _deviceChip(String name, {bool custom = false}) {
+    final bool on = _equipment.contains(name);
+    return Material(
+      color: on ? kAccent.withValues(alpha: 0.14) : kCard,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => _toggleDevice(name),
+        onLongPress: custom ? () => _removeCustomDevice(name) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: on ? kAccent.withValues(alpha: 0.55) : kBorder),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            if (on) ...<Widget>[
+              const Icon(Icons.check_rounded, size: 14, color: kAccent),
+              const SizedBox(width: 6),
+            ],
+            Text(name,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: on ? kAccent : kInk,
+                    fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _addChip() {
+    return Material(
+      color: kCard,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: _addCustomDevice,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: kBorder, style: BorderStyle.solid),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            Icon(Icons.add_rounded, size: 15, color: kMuted),
+            const SizedBox(width: 5),
+            Text('Add',
+                style: TextStyle(fontSize: 13, color: kMuted)),
+          ]),
+        ),
+      ),
     );
   }
 }
