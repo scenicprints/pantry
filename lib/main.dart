@@ -2138,7 +2138,7 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
     });
     List<ProductInfo> res = <ProductInfo>[];
     try {
-      res = await OpenFoodFacts.search(v);
+      res = await FoodSearch.search(v);
     } catch (_) {}
     if (!mounted || id != _reqId) {
       return; // a newer query superseded this one
@@ -2201,7 +2201,7 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text('Type a food name to search Open Food Facts.',
+          child: Text('Type a food name — whole foods first, brands after.',
               textAlign: TextAlign.center,
               style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
         ),
