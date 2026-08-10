@@ -55,4 +55,48 @@ void main() {
       expect(s, '- Air fryer');
     });
   });
+
+  group('avoid list', () {
+    test('the defaults are the old hardcoded dislikes', () {
+      expect(kDefaultAvoids, contains('Pork'));
+      expect(kDefaultAvoids, contains('All seafood'));
+      expect(kDefaultAvoids, contains('Spicy food'));
+      // Every default is offered as a chip so it can be switched off.
+      for (final String a in kDefaultAvoids) {
+        expect(kCommonAvoids, contains(a), reason: a);
+      }
+    });
+
+    test('the chip list is unique and non-empty', () {
+      expect(kCommonAvoids.length, kCommonAvoids.toSet().length);
+      expect(kCommonAvoids.isNotEmpty, true);
+    });
+
+    test('formats one per line for the prompt', () {
+      final String s = Chef.formatAvoids(<String>['Pork', 'Mushrooms']);
+      expect(s, '- Pork\n- Mushrooms');
+    });
+
+    test('an emptied list says nothing is off limits', () {
+      final String s = Chef.formatAvoids(<String>[]);
+      expect(s.toLowerCase(), contains('nothing'));
+      expect(s.toLowerCase(), contains('allergy'));
+    });
+
+    test('blank entries are skipped', () {
+      expect(Chef.formatAvoids(<String>['Pork', '', '   ']), '- Pork');
+    });
+
+    test('removing yogurt from the list removes it from the prompt', () {
+      final List<String> without =
+          kDefaultAvoids.where((String a) => a != 'Yogurt').toList();
+      expect(Chef.formatAvoids(kDefaultAvoids), contains('Yogurt'));
+      expect(Chef.formatAvoids(without), isNot(contains('Yogurt')));
+    });
+
+    test('custom foods pass straight through', () {
+      expect(Chef.formatAvoids(<String>['Bell peppers']), '- Bell peppers');
+    });
+  });
+
 }

@@ -82,6 +82,43 @@ const List<String> kDefaultDevices = <String>[
   'Outdoor grill',
 ];
 
+// ═══════════════════════════════════════════════════════════════════════
+// AVOID LIST — foods the chef must never use. Editable in Settings, because
+// hardcoding dislikes meant the chef also invented its own (it kept refusing
+// yogurt). The list it is given each call is the COMPLETE truth.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Common things people cut out, offered as one-tap chips. Not exhaustive —
+/// anything can be typed in.
+const List<String> kCommonAvoids = <String>[
+  'Pork',
+  'All seafood',
+  'Shellfish',
+  'Spicy food',
+  'Chili powder',
+  'Yogurt',
+  'Mushrooms',
+  'Olives',
+  'Cilantro',
+  'Blue cheese',
+  'Liver / organ meat',
+  'Tofu',
+  'Eggplant',
+  'Beets',
+  'Coconut',
+  'Artificial sweeteners',
+];
+
+/// What the chef used to have hardcoded — kept as the starting point so
+/// behaviour does not change until the user edits it.
+const List<String> kDefaultAvoids = <String>[
+  'Pork',
+  'All seafood',
+  'Spicy food',
+  'Chili powder',
+  'Yogurt',
+];
+
 /// Capability note for [name], or null (covers custom devices too).
 String? deviceNote(String name) {
   for (final CookDevice d in kKnownDevices) {
@@ -105,6 +142,7 @@ class ChefKeys {
   static const String _kKey = 'chef_api_key';
   static const String _kModel = 'chef_model'; // 'haiku' | 'sonnet' | 'opus'
   static const String _kEquipment = 'chef_equipment'; // JSON list of devices
+  static const String _kAvoids = 'chef_avoids'; // JSON list of avoided foods
 
   /// Key baked in at build time via --dart-define=ANTHROPIC_API_KEY=… (a
   /// GitHub Actions secret; shared with BodyComp). A user-entered key
@@ -154,6 +192,25 @@ class ChefKeys {
   static Future<void> setEquipment(List<String> devices) =>
       _s.write(key: _kEquipment, value: jsonEncode(devices));
 
+  /// Foods the chef must never use. Falls back to [kDefaultAvoids] until the
+  /// user edits the list; an explicitly emptied list is respected.
+  static Future<List<String>> getAvoids() async {
+    final String? raw = await _s.read(key: _kAvoids);
+    if (raw == null) {
+      return List<String>.from(kDefaultAvoids);
+    }
+    try {
+      final dynamic d = jsonDecode(raw);
+      if (d is List) {
+        return d.whereType<String>().toList();
+      }
+    } catch (_) {}
+    return List<String>.from(kDefaultAvoids);
+  }
+
+  static Future<void> setAvoids(List<String> foods) =>
+      _s.write(key: _kAvoids, value: jsonEncode(foods));
+
   static Future<String> getModelId() async {
     switch (await getModelPref()) {
       case 'opus':
@@ -201,6 +258,7 @@ Propose exactly 3 dinner options. Each option MUST use a DIFFERENT protein from
 the accepted list. Prioritize any [EXPIRING SOON] ingredient. Options must be
 genuinely different from each other. Follow every hard rule.''';
 
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
 CURRENT PANTRY (what's in stock — [EXPIRING SOON] items must be prioritized;
 prices shown are per gram or per unit):
@@ -214,6 +272,10 @@ $knownPrices'''}
 EQUIPMENT — the ONLY appliances in this kitchen. Never propose a meal that
 needs anything not on this list:
 $equipment
+
+AVOID — the COMPLETE list of foods to keep out of these meals. Nothing else is
+off limits: do NOT refuse or omit any other ingredient on taste grounds.
+$avoids
 
 RECENTLY MADE${hasReq ? ' (context only — you MAY reuse one if it matches the request)' : ' — do NOT repeat any of these'}:
 ${recentMeals.isEmpty ? '(none yet)' : recentMeals.map((String m) => '- $m').join('\n')}
@@ -257,6 +319,7 @@ fields are numbers in dollars (e.g. 8.50).''';
   }) async {
     final String knownPrices = formatKnownPrices(prices, pantry);
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
 Write the full recipe for "${option.title}" (${option.desc}) for $servings
 ${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
@@ -274,6 +337,10 @@ $knownPrices'''}
 EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
 with these; never instruct the user to use anything else:
 $equipment
+
+AVOID — the COMPLETE list of foods to keep out of this recipe. Nothing else is
+off limits on taste grounds.
+$avoids
 
 For every ingredient NOT in that pantry list, append " (new buy)" to its name in
 the ingredients list. Do not imply the user already has anything not listed.
@@ -477,6 +544,16 @@ new buys, and storage/pro tips. Cost fields are numbers in dollars (e.g. 12.75).
     return sb.toString().trimRight();
   }
 
+  /// The complete avoid list for the prompt, one per line.
+  static String formatAvoids(List<String> avoid) {
+    final List<String> live =
+        avoid.where((String a) => a.trim().isNotEmpty).toList();
+    if (live.isEmpty) {
+      return '(nothing — no food is off limits beyond the allergy above)';
+    }
+    return live.map((String a) => '- $a').join('\n');
+  }
+
   /// The user's appliances, one per line, with a capability note where it
   /// changes how the dish should be cooked (e.g. the Tovala's steam cycles).
   static String formatEquipment(List<String> owned) {
@@ -518,8 +595,10 @@ you do not pull generic recipes. You always obey the profile and rules below.
 USER PROFILE (hard rules — never violate):
 - Cooking for 2 people (user + wife) unless told a different number.
 - ALLERGY: shrimp. Never use it.
-- DISLIKES (never use): pork, ALL seafood, yogurt-based dips, chili powder,
-  spicy food of any kind.
+- AVOID LIST: the user message carries an AVOID list. That list is the COMPLETE
+  set of foods to keep out — treat it as exhaustive. Never avoid, refuse or
+  quietly omit an ingredient that is NOT on it because you assume the user
+  dislikes it. If something is not listed, it is fair game.
 - ACCEPTED PROTEINS ONLY:
   * Chicken — ground, or breast. Breast MUST be chopped into pieces if pan-
     cooked (he hates cooking a whole breast on a pan). Whole breast is fine in
@@ -568,7 +647,8 @@ MEAL GENERATION RULES:
 10. Minimize new purchases; prefer long-lasting new buys (spices, oils, sauces)
     over perishables. Label new buys clearly.
 11. Don't ask whether he can go to the store — he can. Just include new buys.
-12. Respect all dislikes/allergies even if the pantry contains a forbidden item.
+12. Respect the allergy and the AVOID list even if the pantry contains a
+    forbidden item — but never invent extra restrictions beyond them.
 
 COST AWARENESS (the user shops on a budget):
 - You are given unit prices: pantry items show a price per gram (e.g. "\$0.012/g")

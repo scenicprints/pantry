@@ -1813,6 +1813,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
   bool _hasUserKey = false;
   String _model = 'haiku';
   List<String> _equipment = <String>[];
+  List<String> _avoids = <String>[];
 
   static const Map<String, String> _modelCost = <String, String>{
     'haiku': 'Fast & cheap — under \$0.01 per meal. Recommended.',
@@ -1836,6 +1837,11 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     ChefKeys.getEquipment().then((List<String> v) {
       if (mounted) {
         setState(() => _equipment = v);
+      }
+    }).catchError((Object _) {});
+    ChefKeys.getAvoids().then((List<String> v) {
+      if (mounted) {
+        setState(() => _avoids = v);
       }
     }).catchError((Object _) {});
   }
@@ -1899,6 +1905,73 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     }
     setState(() => _equipment = <String>[..._equipment, name]);
     ChefKeys.setEquipment(_equipment);
+  }
+
+  // ── avoid list ────────────────────────────────────────────────────────
+
+  /// Foods the user typed in themselves (anything outside the common list).
+  List<String> get _customAvoids {
+    final Set<String> known = kCommonAvoids.toSet();
+    return _avoids.where((String s) => !known.contains(s)).toList();
+  }
+
+  void _toggleAvoid(String name) {
+    setState(() {
+      _avoids = _avoids.contains(name)
+          ? _avoids.where((String s) => s != name).toList()
+          : <String>[..._avoids, name];
+    });
+    ChefKeys.setAvoids(_avoids);
+  }
+
+  Future<void> _addCustomAvoid() async {
+    final TextEditingController c = TextEditingController();
+    final String? entered = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        backgroundColor: kCard,
+        title: Text('Avoid a food', style: serif(size: 19)),
+        content: TextField(
+          controller: c,
+          autofocus: true,
+          textCapitalization: TextCapitalization.sentences,
+          decoration: InputDecoration(
+            hintText: 'e.g. Bell peppers',
+            hintStyle: TextStyle(color: kFaint),
+            filled: true,
+            fillColor: kInset,
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: const BorderSide(color: kBorder)),
+          ),
+          onSubmitted: (String v) => Navigator.pop(ctx, v),
+        ),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('Cancel', style: TextStyle(color: kMuted))),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, c.text),
+            style: ElevatedButton.styleFrom(
+                backgroundColor: kAccent, foregroundColor: Colors.white),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    );
+    final String name = (entered ?? '').trim();
+    if (name.isEmpty || _avoids.contains(name)) {
+      return;
+    }
+    setState(() => _avoids = <String>[..._avoids, name]);
+    ChefKeys.setAvoids(_avoids);
+  }
+
+  void _removeCustomAvoid(String name) {
+    setState(() => _avoids = _avoids.where((String s) => s != name).toList());
+    ChefKeys.setAvoids(_avoids);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('No longer avoiding $name.')));
   }
 
   void _removeCustomDevice(String name) {
@@ -2057,6 +2130,27 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
           Text('Long-press one you added to remove it.',
               style: TextStyle(fontSize: 11, color: kFaint)),
         ],
+        const SizedBox(height: 18),
+        Text('AVOID', style: labelCaps(color: kMuted)),
+        const SizedBox(height: 4),
+        Text('Foods the chef must never use. This list is the whole story — '
+            'anything not on it is fair game.',
+            style: TextStyle(fontSize: 11, color: kFaint, height: 1.35)),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: <Widget>[
+            for (final String a in kCommonAvoids) _avoidChip(a),
+            for (final String a in _customAvoids) _avoidChip(a, custom: true),
+            _addAvoidChip(),
+          ],
+        ),
+        if (_avoids.isEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          Text('Nothing avoided — only your shrimp allergy still applies.',
+              style: TextStyle(fontSize: 11, color: kFaint)),
+        ],
         const SizedBox(height: 16),
         Text('Calls the Claude API directly. Billing is pay-as-you-go and '
             'separate from any Claude.ai subscription.',
@@ -2093,6 +2187,63 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
                     fontSize: 13,
                     color: on ? kAccent : kInk,
                     fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  /// Avoid pills read as a restriction, so an active one is danger-coloured
+  /// rather than the accent used for things you own.
+  Widget _avoidChip(String name, {bool custom = false}) {
+    final bool on = _avoids.contains(name);
+    return Material(
+      color: on ? kDanger.withValues(alpha: 0.13) : kCard,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => _toggleAvoid(name),
+        onLongPress: custom ? () => _removeCustomAvoid(name) : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: on ? kDanger.withValues(alpha: 0.55) : kBorder),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            if (on) ...<Widget>[
+              const Icon(Icons.block_rounded, size: 13, color: kDanger),
+              const SizedBox(width: 6),
+            ],
+            Text(name,
+                style: TextStyle(
+                    fontSize: 13,
+                    color: on ? kDanger : kInk,
+                    fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _addAvoidChip() {
+    return Material(
+      color: kCard,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: _addCustomAvoid,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: kBorder),
+          ),
+          child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            Icon(Icons.add_rounded, size: 15, color: kMuted),
+            const SizedBox(width: 5),
+            Text('Add', style: TextStyle(fontSize: 13, color: kMuted)),
           ]),
         ),
       ),
