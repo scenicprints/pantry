@@ -57,19 +57,14 @@ void main() {
   });
 
   group('avoid list', () {
-    test('the defaults are the old hardcoded dislikes', () {
+    test('the starting list is the old hardcoded dislikes, nothing more', () {
       expect(kDefaultAvoids, contains('Pork'));
       expect(kDefaultAvoids, contains('All seafood'));
       expect(kDefaultAvoids, contains('Spicy food'));
-      // Every default is offered as a chip so it can be switched off.
-      for (final String a in kDefaultAvoids) {
-        expect(kCommonAvoids, contains(a), reason: a);
-      }
-    });
-
-    test('the chip list is unique and non-empty', () {
-      expect(kCommonAvoids.length, kCommonAvoids.toSet().length);
-      expect(kCommonAvoids.isNotEmpty, true);
+      expect(kDefaultAvoids, contains('Yogurt'));
+      // No preset menu — just the five that were already being enforced.
+      expect(kDefaultAvoids.length, 5);
+      expect(kDefaultAvoids.length, kDefaultAvoids.toSet().length);
     });
 
     test('formats one per line for the prompt', () {

@@ -88,29 +88,9 @@ const List<String> kDefaultDevices = <String>[
 // yogurt). The list it is given each call is the COMPLETE truth.
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Common things people cut out, offered as one-tap chips. Not exhaustive —
-/// anything can be typed in.
-const List<String> kCommonAvoids = <String>[
-  'Pork',
-  'All seafood',
-  'Shellfish',
-  'Spicy food',
-  'Chili powder',
-  'Yogurt',
-  'Mushrooms',
-  'Olives',
-  'Cilantro',
-  'Blue cheese',
-  'Liver / organ meat',
-  'Tofu',
-  'Eggplant',
-  'Beets',
-  'Coconut',
-  'Artificial sweeteners',
-];
-
-/// What the chef used to have hardcoded — kept as the starting point so
-/// behaviour does not change until the user edits it.
+/// The starting list — what the chef used to have hardcoded — so behaviour
+/// does not change until the user edits it. There is no preset menu beyond
+/// this: the user types in whatever they actually avoid.
 const List<String> kDefaultAvoids = <String>[
   'Pork',
   'All seafood',

@@ -1909,21 +1909,6 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
 
   // ── avoid list ────────────────────────────────────────────────────────
 
-  /// Foods the user typed in themselves (anything outside the common list).
-  List<String> get _customAvoids {
-    final Set<String> known = kCommonAvoids.toSet();
-    return _avoids.where((String s) => !known.contains(s)).toList();
-  }
-
-  void _toggleAvoid(String name) {
-    setState(() {
-      _avoids = _avoids.contains(name)
-          ? _avoids.where((String s) => s != name).toList()
-          : <String>[..._avoids, name];
-    });
-    ChefKeys.setAvoids(_avoids);
-  }
-
   Future<void> _addCustomAvoid() async {
     final TextEditingController c = TextEditingController();
     final String? entered = await showDialog<String>(
@@ -1967,7 +1952,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     ChefKeys.setAvoids(_avoids);
   }
 
-  void _removeCustomAvoid(String name) {
+  void _removeAvoid(String name) {
     setState(() => _avoids = _avoids.where((String s) => s != name).toList());
     ChefKeys.setAvoids(_avoids);
     ScaffoldMessenger.of(context)
@@ -2133,16 +2118,15 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
         const SizedBox(height: 18),
         Text('AVOID', style: labelCaps(color: kMuted)),
         const SizedBox(height: 4),
-        Text('Foods the chef must never use. This list is the whole story — '
-            'anything not on it is fair game.',
+        Text('Foods the chef must never use — tap to remove one. Anything not '
+            'listed is fair game.',
             style: TextStyle(fontSize: 11, color: kFaint, height: 1.35)),
         const SizedBox(height: 10),
         Wrap(
           spacing: 8,
           runSpacing: 8,
           children: <Widget>[
-            for (final String a in kCommonAvoids) _avoidChip(a),
-            for (final String a in _customAvoids) _avoidChip(a, custom: true),
+            for (final String a in _avoids) _avoidChip(a),
             _addAvoidChip(),
           ],
         ),
@@ -2193,34 +2177,28 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     );
   }
 
-  /// Avoid pills read as a restriction, so an active one is danger-coloured
-  /// rather than the accent used for things you own.
-  Widget _avoidChip(String name, {bool custom = false}) {
-    final bool on = _avoids.contains(name);
+  /// Everything in the list IS avoided, so a pill only needs a way out.
+  Widget _avoidChip(String name) {
     return Material(
-      color: on ? kDanger.withValues(alpha: 0.13) : kCard,
+      color: kDanger.withValues(alpha: 0.13),
       borderRadius: BorderRadius.circular(20),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: () => _toggleAvoid(name),
-        onLongPress: custom ? () => _removeCustomAvoid(name) : null,
+        onTap: () => _removeAvoid(name),
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          padding: const EdgeInsets.fromLTRB(14, 9, 10, 9),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-                color: on ? kDanger.withValues(alpha: 0.55) : kBorder),
+            border: Border.all(color: kDanger.withValues(alpha: 0.55)),
           ),
           child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
-            if (on) ...<Widget>[
-              const Icon(Icons.block_rounded, size: 13, color: kDanger),
-              const SizedBox(width: 6),
-            ],
             Text(name,
-                style: TextStyle(
+                style: const TextStyle(
                     fontSize: 13,
-                    color: on ? kDanger : kInk,
-                    fontWeight: on ? FontWeight.w600 : FontWeight.w400)),
+                    color: kDanger,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(width: 7),
+            const Icon(Icons.close_rounded, size: 14, color: kDanger),
           ]),
         ),
       ),
