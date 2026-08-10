@@ -16,6 +16,7 @@ class LocalCache {
   static late File _plannedFile; // "On the menu" planned meals (chef)
   static late File _usageFile; // spending ledger (consumption events)
   static late File _priceBookFile; // last-known unit prices
+  static late File _recipeBoxFile; // saved recipes (the recipe box)
 
   static Future<void> init() async {
     // systemTemp on Android = /data/user/0/<package>/cache; go up to /files/.
@@ -30,6 +31,7 @@ class LocalCache {
     _plannedFile = File('${filesDir.path}/planned_meals.json');
     _usageFile = File('${filesDir.path}/usage.json');
     _priceBookFile = File('${filesDir.path}/price_book.json');
+    _recipeBoxFile = File('${filesDir.path}/recipe_box.json');
   }
 
   /// Spending-ledger JSON, or null if none saved yet.
@@ -77,6 +79,22 @@ class LocalCache {
   static void savePlanned(String json) {
     try {
       _plannedFile.writeAsStringSync(json);
+    } catch (_) {}
+  }
+
+  /// Recipe-box JSON — the recipes the user chose to keep.
+  static String? loadRecipeBox() {
+    try {
+      if (_recipeBoxFile.existsSync()) {
+        return _recipeBoxFile.readAsStringSync();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static void saveRecipeBox(String json) {
+    try {
+      _recipeBoxFile.writeAsStringSync(json);
     } catch (_) {}
   }
 

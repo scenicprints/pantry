@@ -147,6 +147,95 @@ class Recipe {
       };
 }
 
+// ── recipe box ────────────────────────────────────────────────────────────
+
+/// A recipe kept on purpose. Saved only when the user taps save, so the box
+/// holds the keepers rather than everything the chef ever produced.
+class SavedRecipe {
+  final int savedAtMs; // stable id
+  final Recipe recipe;
+  final int servings; // the size it was cooked at
+  final bool favourite;
+  final int timesCooked;
+
+  const SavedRecipe({
+    required this.savedAtMs,
+    required this.recipe,
+    required this.servings,
+    this.favourite = false,
+    this.timesCooked = 0,
+  });
+
+  String get id => savedAtMs.toString();
+
+  SavedRecipe copyWith({bool? favourite, int? timesCooked, int? servings}) =>
+      SavedRecipe(
+        savedAtMs: savedAtMs,
+        recipe: recipe,
+        servings: servings ?? this.servings,
+        favourite: favourite ?? this.favourite,
+        timesCooked: timesCooked ?? this.timesCooked,
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'savedAtMs': savedAtMs,
+        'servings': servings,
+        if (favourite) 'favourite': true,
+        if (timesCooked > 0) 'timesCooked': timesCooked,
+        'recipe': recipe.toJson(),
+      };
+
+  factory SavedRecipe.fromJson(Map<String, dynamic> j) => SavedRecipe(
+        savedAtMs: (j['savedAtMs'] as num?)?.round() ?? 0,
+        recipe: Recipe.fromStored((j['recipe'] as Map).cast<String, dynamic>()),
+        servings: (j['servings'] as num?)?.round() ?? 2,
+        favourite: j['favourite'] == true,
+        timesCooked: (j['timesCooked'] as num?)?.round() ?? 0,
+      );
+}
+
+/// The whole box. Favourites float to the top, then most recently saved.
+class RecipeBox {
+  final List<SavedRecipe> recipes;
+  const RecipeBox([this.recipes = const <SavedRecipe>[]]);
+
+  List<SavedRecipe> get sorted {
+    final List<SavedRecipe> out = List<SavedRecipe>.of(recipes);
+    out.sort((SavedRecipe a, SavedRecipe b) {
+      if (a.favourite != b.favourite) {
+        return a.favourite ? -1 : 1;
+      }
+      return b.savedAtMs.compareTo(a.savedAtMs);
+    });
+    return out;
+  }
+
+  /// Already in the box? Matched on title so re-cooking the same dish doesn't
+  /// silently create a duplicate entry.
+  bool has(String title) => recipes.any((SavedRecipe r) =>
+      r.recipe.title.trim().toLowerCase() == title.trim().toLowerCase());
+
+  String encode() => jsonEncode(<String, dynamic>{
+        'recipes': recipes.map((SavedRecipe r) => r.toJson()).toList(),
+      });
+
+  static RecipeBox decode(String? jsonStr) {
+    if (jsonStr == null || jsonStr.isEmpty) {
+      return const RecipeBox();
+    }
+    try {
+      final dynamic d = jsonDecode(jsonStr);
+      if (d is Map<String, dynamic>) {
+        return RecipeBox(((d['recipes'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(SavedRecipe.fromJson)
+            .toList());
+      }
+    } catch (_) {}
+    return const RecipeBox();
+  }
+}
+
 // ── planned meals ("On the menu") ─────────────────────────────────────────
 
 /// A recipe the user picked ahead of time and is holding onto so they can

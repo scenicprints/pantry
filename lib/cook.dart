@@ -36,6 +36,7 @@ class _CookTabState extends State<CookTab> {
   int _servings = 2;
   MealHistory _history = const MealHistory(kSeedMealHistory);
   List<PlannedMeal> _planned = <PlannedMeal>[];
+  RecipeBox _box = const RecipeBox();
   bool _hasKey = false;
 
   @override
@@ -43,6 +44,7 @@ class _CookTabState extends State<CookTab> {
     super.initState();
     _history = MealHistory.decode(LocalCache.loadHistory());
     _planned = PlannedMenu.decode(LocalCache.loadPlanned()).meals;
+    _box = RecipeBox.decode(LocalCache.loadRecipeBox());
     ChefKeys.hasUsableKey().then((bool v) {
       if (mounted) {
         setState(() => _hasKey = v);
@@ -57,6 +59,62 @@ class _CookTabState extends State<CookTab> {
 
   void _persistPlanned() =>
       LocalCache.savePlanned(PlannedMenu(_planned).encode());
+
+  void _persistBox() => LocalCache.saveRecipeBox(_box.encode());
+
+  /// Keep a recipe on purpose. Saving the same dish twice just bumps its
+  /// cooked count instead of duplicating the entry.
+  void _saveRecipe(Recipe recipe, int servings) {
+    final int i = _box.recipes.indexWhere((SavedRecipe r) =>
+        r.recipe.title.trim().toLowerCase() ==
+        recipe.title.trim().toLowerCase());
+    setState(() {
+      if (i >= 0) {
+        final List<SavedRecipe> next = List<SavedRecipe>.of(_box.recipes);
+        next[i] = next[i]
+            .copyWith(timesCooked: next[i].timesCooked + 1, servings: servings);
+        _box = RecipeBox(next);
+      } else {
+        _box = RecipeBox(<SavedRecipe>[
+          ..._box.recipes,
+          SavedRecipe(
+              savedAtMs: DateTime.now().millisecondsSinceEpoch,
+              recipe: recipe,
+              servings: servings),
+        ]);
+      }
+    });
+    _persistBox();
+  }
+
+  void _updateSaved(SavedRecipe r) {
+    setState(() => _box = RecipeBox(_box.recipes
+        .map((SavedRecipe x) => x.id == r.id ? r : x)
+        .toList()));
+    _persistBox();
+  }
+
+  void _removeSaved(SavedRecipe r) {
+    setState(() => _box = RecipeBox(
+        _box.recipes.where((SavedRecipe x) => x.id != r.id).toList()));
+    _persistBox();
+  }
+
+  void _openBox() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => RecipeBoxScreen(
+        box: _box,
+        onUpdate: _updateSaved,
+        onRemove: _removeSaved,
+        onPlan: _addPlanned,
+        onOpenPlanned: _openPlanned,
+        onCooked: _markCooked,
+        onRemovePlanned: _removePlanned,
+        onUpdatePlanned: _updatePlanned,
+        onSave: _saveRecipe,
+      ),
+    ));
+  }
 
   /// Save a freshly picked recipe onto the menu and return it (so the caller
   /// can open its shopping list).
@@ -98,6 +156,7 @@ class _CookTabState extends State<CookTab> {
         onUpdate: _updatePlanned,
         onCooked: _markCooked,
         onRemove: _removePlanned,
+        onSave: _saveRecipe,
       ),
     ));
   }
@@ -171,6 +230,7 @@ class _CookTabState extends State<CookTab> {
             pantry: widget.items,
             prices: widget.prices),
         onPlan: _addPlanned,
+        onSave: _saveRecipe,
         onUpdate: _updatePlanned,
         onCooked: _markCooked,
         onRemove: _removePlanned,
@@ -282,6 +342,10 @@ class _CookTabState extends State<CookTab> {
           const SizedBox(height: 24),
         ],
         _statsRow(itemCount),
+        if (_box.recipes.isNotEmpty) ...<Widget>[
+          const SizedBox(height: 12),
+          _recipeBoxTile(),
+        ],
         const SizedBox(height: 24),
         _servingsStepper(),
         const SizedBox(height: 24),
@@ -322,6 +386,44 @@ class _CookTabState extends State<CookTab> {
           ),
         ),
       ],
+    );
+  }
+
+  /// Quiet doorway to the recipe box. Only appears once something is saved,
+  /// so it never sits there empty.
+  Widget _recipeBoxTile() {
+    final int n = _box.recipes.length;
+    final int favs =
+        _box.recipes.where((SavedRecipe r) => r.favourite).length;
+    return Material(
+      color: kCard,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: _openBox,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: kBorder)),
+          child: Row(children: <Widget>[
+            const Text('🔖', style: TextStyle(fontSize: 18)),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('Recipe box',
+                        style: serif(size: 16, weight: FontWeight.w600)),
+                    Text(
+                        '$n saved${favs > 0 ? ' · $favs favourite${favs == 1 ? '' : 's'}' : ''}',
+                        style: mono(size: 11, color: kMuted)),
+                  ]),
+            ),
+            Icon(Icons.chevron_right_rounded, color: kMuted),
+          ]),
+        ),
+      ),
     );
   }
 
@@ -479,6 +581,8 @@ class OptionsScreen extends StatefulWidget {
   final Future<List<MealOption>> Function() onRegenerate;
   final Future<Recipe> Function(MealOption) onPick;
   final PlannedMeal Function(Recipe recipe, int servings) onPlan;
+  /// Keep a recipe in the box (threaded down to the recipe screen).
+  final void Function(Recipe recipe, int servings)? onSave;
   final void Function(PlannedMeal meal) onUpdate;
   final void Function(String title) onCooked;
   final void Function(PlannedMeal meal) onRemove;
@@ -491,6 +595,7 @@ class OptionsScreen extends StatefulWidget {
     required this.onRegenerate,
     required this.onPick,
     required this.onPlan,
+    this.onSave,
     required this.onUpdate,
     required this.onCooked,
     required this.onRemove,
@@ -528,6 +633,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
         onUpdate: widget.onUpdate,
         onCooked: widget.onCooked,
         onRemove: widget.onRemove,
+        onSave: widget.onSave,
       ),
     ));
   }
@@ -653,6 +759,278 @@ class _OptionsScreenState extends State<OptionsScreen> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// RECIPE BOX — the keepers. Nothing lands here automatically; a recipe is
+// saved only when you tap the bookmark, so the box stays a shortlist rather
+// than a dumping ground. From here a recipe can be re-read, cooked again, or
+// put back on the menu with its shopping list.
+// ═══════════════════════════════════════════════════════════════════════
+
+class RecipeBoxScreen extends StatefulWidget {
+  final RecipeBox box;
+  final void Function(SavedRecipe) onUpdate;
+  final void Function(SavedRecipe) onRemove;
+  final PlannedMeal Function(Recipe recipe, int servings) onPlan;
+  final void Function(PlannedMeal) onOpenPlanned;
+  final void Function(String title) onCooked;
+  final void Function(PlannedMeal) onRemovePlanned;
+  final void Function(PlannedMeal) onUpdatePlanned;
+  final void Function(Recipe recipe, int servings) onSave;
+
+  const RecipeBoxScreen({
+    super.key,
+    required this.box,
+    required this.onUpdate,
+    required this.onRemove,
+    required this.onPlan,
+    required this.onOpenPlanned,
+    required this.onCooked,
+    required this.onRemovePlanned,
+    required this.onUpdatePlanned,
+    required this.onSave,
+  });
+
+  @override
+  State<RecipeBoxScreen> createState() => _RecipeBoxScreenState();
+}
+
+class _RecipeBoxScreenState extends State<RecipeBoxScreen> {
+  late RecipeBox _box = widget.box;
+  String _query = '';
+
+  List<SavedRecipe> get _visible {
+    final String q = _query.trim().toLowerCase();
+    final List<SavedRecipe> all = _box.sorted;
+    if (q.isEmpty) {
+      return all;
+    }
+    return all
+        .where((SavedRecipe r) =>
+            r.recipe.title.toLowerCase().contains(q) ||
+            r.recipe.description.toLowerCase().contains(q))
+        .toList();
+  }
+
+  void _toggleFav(SavedRecipe r) {
+    final SavedRecipe next = r.copyWith(favourite: !r.favourite);
+    setState(() => _box = RecipeBox(_box.recipes
+        .map((SavedRecipe x) => x.id == r.id ? next : x)
+        .toList()));
+    widget.onUpdate(next);
+  }
+
+  Future<void> _remove(SavedRecipe r) async {
+    final bool? yes = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext ctx) => AlertDialog(
+        backgroundColor: kCard,
+        title: Text('Remove from box?', style: serif(size: 18)),
+        content: Text('“${r.recipe.title}” will be deleted from your recipe '
+            'box. Your history is untouched.',
+            style: TextStyle(fontSize: 13.5, color: kMuted, height: 1.4)),
+        actions: <Widget>[
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Keep', style: TextStyle(color: kMuted))),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Remove',
+                  style: TextStyle(
+                      color: kDanger, fontWeight: FontWeight.w700))),
+        ],
+      ),
+    );
+    if (yes == true) {
+      setState(() => _box = RecipeBox(
+          _box.recipes.where((SavedRecipe x) => x.id != r.id).toList()));
+      widget.onRemove(r);
+    }
+  }
+
+  void _open(SavedRecipe r) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => RecipeScreen(
+        recipe: r.recipe,
+        initialServings: r.servings,
+        alreadySaved: true,
+        onCooked: (String title) {
+          widget.onCooked(title);
+          widget.onUpdate(r.copyWith(timesCooked: r.timesCooked + 1));
+        },
+      ),
+    ));
+  }
+
+  /// Put it back on the menu so the shopping list comes with it.
+  void _toMenu(SavedRecipe r) {
+    final PlannedMeal meal = widget.onPlan(r.recipe, r.servings);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('“${r.recipe.title}” is back on your menu.')));
+    widget.onOpenPlanned(meal);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<SavedRecipe> items = _visible;
+    final double bottomPad = 28 + MediaQuery.of(context).viewPadding.bottom;
+    return Scaffold(
+      appBar: AppBar(title: Text('Recipe box', style: serif(size: 20))),
+      body: _box.recipes.isEmpty
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.all(34),
+                child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const Text('🔖', style: TextStyle(fontSize: 40)),
+                      const SizedBox(height: 14),
+                      Text('Nothing saved yet',
+                          style: serif(size: 20, weight: FontWeight.w600)),
+                      const SizedBox(height: 8),
+                      Text('Open any recipe and tap the bookmark to keep it '
+                          'here. Saved recipes can be re-read, cooked again, '
+                          'or put back on your menu with a shopping list.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                              fontSize: 13.5, color: kMuted, height: 1.5)),
+                    ]),
+              ),
+            )
+          : Column(children: <Widget>[
+              if (_box.recipes.length > 4)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+                  child: TextField(
+                    onChanged: (String v) => setState(() => _query = v),
+                    decoration: InputDecoration(
+                      hintText: 'Search your recipes',
+                      hintStyle: TextStyle(color: kFaint),
+                      prefixIcon: Icon(Icons.search_rounded, color: kMuted),
+                      isDense: true,
+                      filled: true,
+                      fillColor: kInset,
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: kBorder)),
+                      enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: const BorderSide(color: kBorder)),
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: items.isEmpty
+                    ? Center(
+                        child: Text('No matches.',
+                            style: TextStyle(color: kMuted, fontSize: 13.5)))
+                    : ListView(
+                        padding: EdgeInsets.fromLTRB(16, 4, 16, bottomPad),
+                        children: <Widget>[
+                          for (final SavedRecipe r in items) _card(r),
+                        ],
+                      ),
+              ),
+            ]),
+    );
+  }
+
+  Widget _card(SavedRecipe r) {
+    final Recipe rec = r.recipe;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+          color: kCard,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+              color: r.favourite
+                  ? kAccent.withValues(alpha: 0.5)
+                  : kBorder)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+        InkWell(
+          onTap: () => _open(r),
+          borderRadius:
+              const BorderRadius.vertical(top: Radius.circular(16)),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 8, 10),
+            child: Row(children: <Widget>[
+              Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(rec.title,
+                          style: serif(size: 18, weight: FontWeight.w600)),
+                      if (rec.description.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 4),
+                        Text(rec.description,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: serif(
+                                size: 13,
+                                weight: FontWeight.w400,
+                                color: kMuted,
+                                style: FontStyle.italic,
+                                height: 1.35)),
+                      ],
+                      const SizedBox(height: 8),
+                      Row(children: <Widget>[
+                        Text('serves ${r.servings}',
+                            style: mono(size: 11, color: kOlive)),
+                        if (rec.estCostPerServing > 0) ...<Widget>[
+                          const SizedBox(width: 12),
+                          Text('${money(rec.estCostPerServing)}/serving',
+                              style: mono(size: 11, color: kAccent)),
+                        ],
+                        if (r.timesCooked > 0) ...<Widget>[
+                          const SizedBox(width: 12),
+                          Text('cooked ${r.timesCooked}×',
+                              style: mono(size: 11, color: kMuted)),
+                        ],
+                      ]),
+                    ]),
+              ),
+              IconButton(
+                tooltip: r.favourite ? 'Unfavourite' : 'Favourite',
+                onPressed: () => _toggleFav(r),
+                icon: Icon(
+                    r.favourite ? Icons.star_rounded : Icons.star_border_rounded,
+                    size: 20,
+                    color: r.favourite ? kAccent : kMuted),
+              ),
+            ]),
+          ),
+        ),
+        Divider(height: 1, color: kBorder),
+        Row(children: <Widget>[
+          Expanded(
+            child: TextButton.icon(
+              onPressed: () => _open(r),
+              icon: const Icon(Icons.menu_book_rounded, size: 17),
+              label: const Text('Recipe'),
+              style: TextButton.styleFrom(foregroundColor: kInk),
+            ),
+          ),
+          Container(width: 1, height: 26, color: kBorder),
+          Expanded(
+            child: TextButton.icon(
+              onPressed: () => _toMenu(r),
+              icon: const Icon(Icons.playlist_add_rounded, size: 17),
+              label: const Text('To menu'),
+              style: TextButton.styleFrom(foregroundColor: kOlive),
+            ),
+          ),
+          Container(width: 1, height: 26, color: kBorder),
+          IconButton(
+            tooltip: 'Remove',
+            onPressed: () => _remove(r),
+            icon: const Icon(Icons.delete_outline_rounded,
+                size: 18, color: kDanger),
+          ),
+        ]),
+      ]),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // PLANNED MEAL — a saved meal on the menu. Shows a checkable shopping list
 // (every ingredient) so you can shop ahead, then cook it whenever. Ticks and
 // the serving count persist; cooking (or removing) clears it from the menu.
@@ -663,6 +1041,8 @@ class PlannedMealScreen extends StatefulWidget {
   final void Function(PlannedMeal meal) onUpdate;
   final void Function(String title) onCooked;
   final void Function(PlannedMeal meal) onRemove;
+  /// Keep a recipe in the box (threaded down to the recipe screen).
+  final void Function(Recipe recipe, int servings)? onSave;
 
   const PlannedMealScreen({
     super.key,
@@ -670,6 +1050,7 @@ class PlannedMealScreen extends StatefulWidget {
     required this.onUpdate,
     required this.onCooked,
     required this.onRemove,
+    this.onSave,
   });
 
   @override
@@ -796,6 +1177,7 @@ class _PlannedMealScreenState extends State<PlannedMealScreen> {
                   builder: (_) => RecipeScreen(
                     recipe: r,
                     initialServings: _meal.servings,
+                    onSave: widget.onSave,
                     onCooked: (String title) {
                       widget.onCooked(title);
                       widget.onRemove(_meal);
@@ -908,11 +1290,17 @@ class RecipeScreen extends StatefulWidget {
   final Recipe recipe;
   final void Function(String title) onCooked;
   final int? initialServings;
+  /// Keep this recipe in the box. Null hides the save action (e.g. when the
+  /// recipe is already being viewed from the box itself).
+  final void Function(Recipe recipe, int servings)? onSave;
+  final bool alreadySaved;
   const RecipeScreen({
     super.key,
     required this.recipe,
     required this.onCooked,
     this.initialServings,
+    this.onSave,
+    this.alreadySaved = false,
   });
 
   @override
@@ -921,6 +1309,14 @@ class RecipeScreen extends StatefulWidget {
 
 class _RecipeScreenState extends State<RecipeScreen> {
   late int _servings = widget.initialServings ?? widget.recipe.baseServings;
+  late bool _saved = widget.alreadySaved;
+
+  void _save() {
+    widget.onSave?.call(widget.recipe, _servings);
+    setState(() => _saved = true);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('“${widget.recipe.title}” saved to your recipe box.')));
+  }
 
   double get _factor =>
       widget.recipe.baseServings == 0 ? 1 : _servings / widget.recipe.baseServings;
@@ -969,7 +1365,20 @@ class _RecipeScreenState extends State<RecipeScreen> {
     final Recipe r = widget.recipe;
     final double bottomPad = 32 + MediaQuery.of(context).viewPadding.bottom;
     return Scaffold(
-      appBar: AppBar(),
+      appBar: AppBar(
+        actions: <Widget>[
+          if (widget.onSave != null)
+            IconButton(
+              tooltip: _saved ? 'In your recipe box' : 'Save to recipe box',
+              onPressed: _saved ? null : _save,
+              icon: Icon(
+                  _saved
+                      ? Icons.bookmark_rounded
+                      : Icons.bookmark_border_rounded,
+                  color: _saved ? kAccent : kInk),
+            ),
+        ],
+      ),
       body: ListView(
         padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPad),
         children: <Widget>[
