@@ -177,6 +177,7 @@ class _CookTabState extends State<CookTab> {
         pantry: widget.items,
         servings: _servings,
         recentMeals: _history.recent(),
+        recentForms: _history.frequentShapes(),
         prices: widget.prices,
       ),
     );
@@ -199,6 +200,7 @@ class _CookTabState extends State<CookTab> {
         pantry: widget.items,
         servings: _servings,
         recentMeals: _history.recent(),
+        recentForms: _history.frequentShapes(),
         prices: widget.prices,
         request: request,
       ),
@@ -217,12 +219,14 @@ class _CookTabState extends State<CookTab> {
         options: options,
         servings: _servings,
         request: request,
-        onRegenerate: () => Chef.generateOptions(
+        onRegenerate: (List<MealOption> shown) => Chef.generateOptions(
           pantry: widget.items,
           servings: _servings,
           recentMeals: _history.recent(),
+          recentForms: _history.frequentShapes(),
           prices: widget.prices,
           request: request,
+          justShown: shown.map((MealOption o) => o.title).toList(),
         ),
         onPick: (MealOption o) => Chef.generateRecipe(
             option: o,
@@ -570,15 +574,62 @@ class _CookTabState extends State<CookTab> {
       );
 }
 
+/// "I cooked this" clears the meal off the menu and writes history — one
+/// mis-tap and it's gone. Every path to it asks first.
+Future<bool> confirmCooked(BuildContext context, String title) async {
+  final bool? ok = await showModalBottomSheet<bool>(
+    context: context,
+    backgroundColor: kCard,
+    shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+    builder: (BuildContext ctx) {
+      final double pad = 20 + MediaQuery.of(ctx).viewPadding.bottom;
+      return Padding(
+        padding: EdgeInsets.fromLTRB(22, 22, 22, pad),
+        child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
+          Text('Cooked “$title”?',
+              textAlign: TextAlign.center,
+              style: serif(size: 20, weight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          Text('It comes off the menu and goes into your history.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13.5, color: kMuted, height: 1.4)),
+          const SizedBox(height: 20),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              child: Text('Yes, cooked',
+                  style: serif(size: 16, weight: FontWeight.w600, color: Colors.white)),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text('Not yet', style: TextStyle(color: kMuted))),
+        ]),
+      );
+    },
+  );
+  return ok ?? false;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
-// OPTIONS — 3 protein-varied cards + "Three different ideas"
+// OPTIONS — 3 different dinners + "Three different ideas"
 // ═══════════════════════════════════════════════════════════════════════
 
 class OptionsScreen extends StatefulWidget {
   final List<MealOption> options;
   final int servings;
   final String? request; // the craving, when these came from "Cook a request"
-  final Future<List<MealOption>> Function() onRegenerate;
+  /// Regenerate, told what was just on screen so it can't hand it back.
+  final Future<List<MealOption>> Function(List<MealOption> shown) onRegenerate;
   final Future<Recipe> Function(MealOption) onPick;
   final PlannedMeal Function(Recipe recipe, int servings) onPlan;
   /// Keep a recipe in the box (threaded down to the recipe screen).
@@ -610,7 +661,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
 
   Future<void> _regenerate() async {
     final List<MealOption>? next = await withSpinner<List<MealOption>>(
-        context, 'Three different ideas…', widget.onRegenerate);
+        context, 'Three different ideas…', () => widget.onRegenerate(_options));
     if (next != null && mounted) {
       setState(() => _options = next);
     }
@@ -713,8 +764,16 @@ class _OptionsScreenState extends State<OptionsScreen> {
             borderRadius: BorderRadius.circular(16),
             border: Border.all(color: kBorder)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-          if (o.protein.isNotEmpty)
-            Text(o.protein.toUpperCase(), style: labelCaps(color: kAccent)),
+          // "CHICKEN · SHEET-PAN · MEDITERRANEAN" — the three axes that make
+          // it a different dinner from the other two cards.
+          if (o.protein.isNotEmpty || o.shape.isNotEmpty)
+            Text(
+                <String>[
+                  if (o.protein.isNotEmpty) o.protein,
+                  if (o.form.isNotEmpty) o.form,
+                  if (o.cuisine.isNotEmpty) o.cuisine,
+                ].join(' · ').toUpperCase(),
+                style: labelCaps(color: kAccent)),
           const SizedBox(height: 6),
           Text(o.title, style: serif(size: 21, weight: FontWeight.w600)),
           if (o.desc.isNotEmpty) ...<Widget>[
@@ -726,6 +785,16 @@ class _OptionsScreenState extends State<OptionsScreen> {
                     color: kMuted,
                     style: FontStyle.italic,
                     height: 1.4)),
+          ],
+          if (o.sides.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 8),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+              const Icon(Icons.eco_rounded, size: 14, color: kOlive),
+              const SizedBox(width: 6),
+              Expanded(
+                  child: Text('with ${o.sides}',
+                      style: TextStyle(fontSize: 12.5, color: kOlive, height: 1.3))),
+            ]),
           ],
           const SizedBox(height: 12),
           Row(children: <Widget>[
@@ -1096,7 +1165,13 @@ class _PlannedMealScreenState extends State<PlannedMealScreen> {
     }
   }
 
-  void _cooked() {
+  Future<void> _cooked() async {
+    // Destructive (clears the menu, writes history) and it sat one thumb-width
+    // from "View full recipe" — so it asks first.
+    final bool ok = await confirmCooked(context, _meal.recipe.title);
+    if (!ok || !mounted) {
+      return;
+    }
     widget.onCooked(_meal.recipe.title);
     widget.onRemove(_meal);
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -1168,10 +1243,12 @@ class _PlannedMealScreenState extends State<PlannedMealScreen> {
             for (int i = 0; i < r.ingredients.length; i++)
               _shoppingRow(i, r.ingredients[i]),
           const SizedBox(height: 22),
+          // The thing you tap every time is the big one; the thing you tap
+          // once per meal is quiet, further down, and confirms.
           SizedBox(
             width: double.infinity,
             height: 52,
-            child: OutlinedButton.icon(
+            child: ElevatedButton.icon(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
                   builder: (_) => RecipeScreen(
@@ -1186,28 +1263,24 @@ class _PlannedMealScreenState extends State<PlannedMealScreen> {
                 ),
               ),
               icon: const Icon(Icons.menu_book_rounded, size: 18),
-              label: const Text('View full recipe'),
-              style: OutlinedButton.styleFrom(
-                  foregroundColor: kInk,
-                  side: const BorderSide(color: kBorder),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12))),
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: ElevatedButton.icon(
-              onPressed: _cooked,
-              icon: const Icon(Icons.check_rounded),
-              label: Text('I cooked this',
+              label: Text('View full recipe',
                   style: serif(size: 16, weight: FontWeight.w600, color: Colors.white)),
               style: ElevatedButton.styleFrom(
                   backgroundColor: kAccent,
                   foregroundColor: Colors.white,
                   shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12))),
+            ),
+          ),
+          const SizedBox(height: 26),
+          Center(
+            child: TextButton.icon(
+              onPressed: _cooked,
+              icon: const Icon(Icons.check_rounded, size: 18),
+              label: const Text('I cooked this'),
+              style: TextButton.styleFrom(
+                  foregroundColor: kMuted,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12)),
             ),
           ),
         ],
@@ -1447,7 +1520,10 @@ class _RecipeScreenState extends State<RecipeScreen> {
             width: double.infinity,
             height: 50,
             child: OutlinedButton.icon(
-              onPressed: () {
+              onPressed: () async {
+                if (!await confirmCooked(context, r.title) || !context.mounted) {
+                  return;
+                }
                 widget.onCooked(r.title);
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                     content: Text('Added "${r.title}" to your meal history.')));

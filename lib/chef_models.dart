@@ -8,10 +8,36 @@ import 'dart:convert';
 // ═══════════════════════════════════════════════════════════════════════
 
 /// One of the 3 options the user picks from.
+/// The dish forms the chef must choose from. Three options must each use a
+/// different one — this is what "genuinely different" means, mechanically.
+const List<String> kDishForms = <String>[
+  'sheet-pan',
+  'stir-fry',
+  'skillet',
+  'bowl',
+  'soup or stew',
+  'braise',
+  'salad-as-a-meal',
+  'tacos or wraps',
+  'pasta or noodles',
+  'roast',
+  'grill',
+  'air fryer basket',
+  'stuffed or rolled',
+  'burger or patty',
+  'meatballs',
+  'casserole or bake',
+  'flatbread or pizza',
+  'curry',
+];
+
 class MealOption {
   final String title;
   final String desc;
   final String protein;
+  final String form; // one of kDishForms (free text tolerated)
+  final String cuisine; // e.g. "Mexican", "Thai", "American diner"
+  final String sides; // the vegetable side (+ optional starch) on the plate
   final String newBuys; // "" or "No new buys" when all from pantry
   final double proteinPerServing;
   final double caloriesPerServing;
@@ -22,6 +48,9 @@ class MealOption {
     required this.title,
     required this.desc,
     required this.protein,
+    this.form = '',
+    this.cuisine = '',
+    this.sides = '',
     required this.newBuys,
     required this.proteinPerServing,
     required this.caloriesPerServing,
@@ -33,12 +62,77 @@ class MealOption {
         title: (j['title'] as String?)?.trim() ?? 'Untitled',
         desc: (j['desc'] as String?)?.trim() ?? '',
         protein: (j['protein'] as String?)?.trim() ?? '',
+        form: (j['form'] as String?)?.trim() ?? '',
+        cuisine: (j['cuisine'] as String?)?.trim() ?? '',
+        sides: (j['sides'] as String?)?.trim() ?? '',
         newBuys: (j['newBuys'] as String?)?.trim() ?? '',
         proteinPerServing: _num(j['proteinPerServing']),
         caloriesPerServing: _num(j['caloriesPerServing']),
         estCostTotal: _num(j['estCostTotal']),
         estCostPerServing: _num(j['estCostPerServing']),
       );
+
+  /// A short "form · cuisine" line for the option card ('' if unknown).
+  String get shape {
+    final List<String> parts = <String>[
+      if (form.isNotEmpty) form,
+      if (cuisine.isNotEmpty) cuisine,
+    ];
+    return parts.join(' · ');
+  }
+}
+
+/// Normalises a free-text form/protein for comparison ("Sheet Pan" ==
+/// "sheet-pan"; "chicken breast" and "chicken thighs" both == "chicken").
+String _norm(String s) => s
+    .toLowerCase()
+    .replaceAll(RegExp(r'[^a-z]+'), ' ')
+    .trim()
+    .replaceAll(RegExp(r'\s+'), ' ');
+
+const List<String> _kProteinHeads = <String>[
+  'chicken', 'turkey', 'beef', 'steak', 'pork', 'lamb', 'salmon', 'tuna',
+  'cod', 'tilapia', 'shrimp', 'fish', 'tofu', 'tempeh', 'egg', 'bean',
+  'lentil', 'chickpea', 'sausage', 'ham', 'bacon',
+];
+
+String proteinFamily(String protein) {
+  final String p = _norm(protein);
+  for (final String h in _kProteinHeads) {
+    if (p.contains(h)) {
+      return h == 'steak' ? 'beef' : h;
+    }
+  }
+  return p;
+}
+
+/// Why a set of options fails the "three different dinners" bar — '' when
+/// it passes. Checked app-side because the model reads "genuinely different"
+/// as "different sauce on the same meatball".
+String optionsSimilarity(List<MealOption> opts, {bool requireProteinVariety = true}) {
+  if (opts.length < 2) {
+    return '';
+  }
+  final List<String> forms = opts.map((MealOption o) => _norm(o.form)).toList();
+  final List<String> proteins =
+      opts.map((MealOption o) => proteinFamily(o.protein)).toList();
+  final List<String> cuisines =
+      opts.map((MealOption o) => _norm(o.cuisine)).toList();
+  final List<String> problems = <String>[];
+  if (forms.any((String f) => f.isNotEmpty) &&
+      forms.toSet().length < forms.where((String f) => f.isNotEmpty).length) {
+    problems.add('two options share the same dish form (${forms.join(' / ')})');
+  }
+  if (requireProteinVariety &&
+      proteins.any((String p) => p.isNotEmpty) &&
+      proteins.toSet().length < proteins.where((String p) => p.isNotEmpty).length) {
+    problems.add('two options share a protein (${proteins.join(' / ')})');
+  }
+  if (cuisines.any((String c) => c.isNotEmpty) &&
+      cuisines.toSet().length < cuisines.where((String c) => c.isNotEmpty).length) {
+    problems.add('two options share a cuisine (${cuisines.join(' / ')})');
+  }
+  return problems.join('; ');
 }
 
 /// One ingredient row. [amount] is a display string ("300 g", "2", "1 tbsp");
@@ -367,6 +461,40 @@ class MealHistory {
 
   List<String> recent({int n = 30}) =>
       meals.length <= n ? meals : meals.sublist(meals.length - n);
+
+  /// What he's been eating a LOT of lately, read off the last [n] titles —
+  /// "meatballs ×3, sheet-pan ×2, chicken ×5". Anything seen twice or more
+  /// is worth steering away from. Ordered most-frequent first.
+  List<String> frequentShapes({int n = 12}) {
+    final List<String> tail = recent(n: n);
+    final Map<String, int> counts = <String, int>{};
+    void bump(String k) => counts[k] = (counts[k] ?? 0) + 1;
+    for (final String title in tail) {
+      final String t = title.toLowerCase();
+      for (final String form in kDishForms) {
+        final String key = form.split(' ').first.replaceAll('-', ' ');
+        // "sheet-pan" → "sheet pan"; "tacos or wraps" → "tacos"; "bowl".
+        final List<String> probes = <String>[
+          key,
+          key.replaceAll(' ', '-'),
+          if (key.endsWith('s')) key.substring(0, key.length - 1),
+        ];
+        if (probes.any((String p) => p.length > 2 && t.contains(p))) {
+          bump(form);
+        }
+      }
+      final String fam = proteinFamily(t);
+      if (fam.isNotEmpty && fam != t) {
+        bump(fam);
+      }
+    }
+    final List<MapEntry<String, int>> hot = counts.entries
+        .where((MapEntry<String, int> e) => e.value >= 2)
+        .toList()
+      ..sort((MapEntry<String, int> a, MapEntry<String, int> b) =>
+          b.value.compareTo(a.value));
+    return <String>[for (final MapEntry<String, int> e in hot) '${e.key} ×${e.value}'];
+  }
 
   MealHistory withCooked(String title) {
     final List<String> next = <String>[

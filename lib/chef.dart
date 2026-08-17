@@ -208,18 +208,70 @@ class Chef {
 
   // ── Call 1: three options ─────────────────────────────────────────────
   // [request], when given, is a free-text craving/description (e.g. from the
-  // wife) — the 3 options are then tailored to it instead of protein-varied.
+  // wife) — the 3 options are then tailored to it. [justShown] are the titles
+  // of options the user just rejected with "three different ideas", so a
+  // regenerate can't hand back the same three. [recentForms] is derived from
+  // recentMeals so the chef is steered away from what it keeps making.
   static Future<List<MealOption>> generateOptions({
     required List<PantryItem> pantry,
     required int servings,
     required List<String> recentMeals,
     PriceBook prices = const PriceBook(),
     String? request,
+    List<String> justShown = const <String>[],
+    List<String> recentForms = const <String>[],
   }) async {
     final String req = request?.trim() ?? '';
     final bool hasReq = req.isNotEmpty;
+    // Ask, check, and if the three came back as one dinner in three hats,
+    // ask once more with the specific complaint attached.
+    List<MealOption> out = await _askOptions(
+        pantry: pantry,
+        servings: servings,
+        recentMeals: recentMeals,
+        prices: prices,
+        request: req,
+        justShown: justShown,
+        recentForms: recentForms);
+    final String problem =
+        optionsSimilarity(out, requireProteinVariety: !hasReq);
+    if (problem.isNotEmpty) {
+      try {
+        final List<MealOption> retry = await _askOptions(
+            pantry: pantry,
+            servings: servings,
+            recentMeals: recentMeals,
+            prices: prices,
+            request: req,
+            justShown: justShown,
+            recentForms: recentForms,
+            complaint: problem);
+        if (optionsSimilarity(retry, requireProteinVariety: !hasReq).length <
+            problem.length) {
+          out = retry;
+        }
+      } on ChefException {
+        // Keep the first set rather than fail the whole ask.
+      }
+    }
+    return out;
+  }
+
+  static Future<List<MealOption>> _askOptions({
+    required List<PantryItem> pantry,
+    required int servings,
+    required List<String> recentMeals,
+    required PriceBook prices,
+    required String request,
+    required List<String> justShown,
+    required List<String> recentForms,
+    String complaint = '',
+  }) async {
+    final String req = request;
+    final bool hasReq = req.isNotEmpty;
     final String knownPrices = formatKnownPrices(prices, pantry);
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
+    final String formList = kDishForms.join(', ');
 
     final String task = hasReq
         ? '''
@@ -227,16 +279,19 @@ The user has a SPECIFIC REQUEST for this meal:
 "$req"
 
 Propose exactly 3 options that satisfy this request as closely as possible while
-still obeying EVERY hard rule (allergy, dislikes, accepted proteins only). The 3
-options should be genuinely different takes on what was asked — vary the flavor,
-sides, or preparation — but they do NOT need to use different proteins if the
-request points to one. Use pantry items where they fit; new buys are expected
-and fine to fulfil the request. Only prioritize an [EXPIRING SOON] item if it
-suits the request.'''
+still obeying EVERY hard rule (allergy, AVOID list). They must still be THREE
+DIFFERENT DINNERS — different dish FORM and different cuisine/flavor family — but
+they do NOT need different proteins if the request points to one. Use pantry
+items where they fit; new buys are expected and fine to fulfil the request. Only
+prioritize an [EXPIRING SOON] item if it suits the request.'''
         : '''
-Propose exactly 3 dinner options. Each option MUST use a DIFFERENT protein from
-the accepted list. Prioritize any [EXPIRING SOON] ingredient. Options must be
-genuinely different from each other. Follow every hard rule.''';
+Propose exactly 3 dinner options — THREE DIFFERENT DINNERS, not three versions
+of one. Concretely, all three must differ on EVERY one of these axes:
+  • dish FORM — pick each from: $formList. No two options may share a form.
+  • CUISINE / flavor family — no two the same.
+  • primary PROTEIN — no two the same. Any protein is allowed unless it is on
+    the AVOID list; do not restrict yourself to a short list of "usual" ones.
+Prioritize any [EXPIRING SOON] ingredient. Follow every hard rule.''';
 
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
@@ -259,10 +314,27 @@ $avoids
 
 RECENTLY MADE${hasReq ? ' (context only — you MAY reuse one if it matches the request)' : ' — do NOT repeat any of these'}:
 ${recentMeals.isEmpty ? '(none yet)' : recentMeals.map((String m) => '- $m').join('\n')}
+${recentForms.isEmpty ? '' : '''
+The user has been eating a lot of these lately — steer AWAY from them:
+${recentForms.map((String f) => '- $f').join('\n')}'''}
+${justShown.isEmpty ? '' : '''
+
+The user just REJECTED these three and asked for different ideas — none of your
+options may resemble them (not the same dish, form, or spin):
+${justShown.map((String t) => '- $t').join('\n')}'''}
+${complaint.isEmpty ? '' : '''
+
+YOUR LAST ATTEMPT FAILED THE VARIETY CHECK: $complaint. Fix that — the three
+options must be three genuinely different dinners.'''}
 
 Cooking for $servings ${servings == 1 ? 'person' : 'people'}.
 
 $task
+
+EVERY OPTION IS A WHOLE PLATE, not just a main: a main + a real VEGETABLE side
+(an actual vegetable dish, not a garnish) + an optional starch. Build sides from
+pantry vegetables when there are any; otherwise name them as new buys. Nutrition
+and cost figures are for the whole plate. Put the side(s) in "sides".
 
 The pantry above is the COMPLETE list of what the user has. Everything else —
 including any protein, oil, spice, or staple — is a NEW BUY. Do not claim the
@@ -274,11 +346,13 @@ prices above for pantry/known items; estimate typical grocery prices for the
 rest. Prefer cheaper options when quality/health are equal.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"options":[{"title":"","desc":"","protein":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
-"newBuys" is a short comma list (or "No new buys" if all from pantry). Cost
-fields are numbers in dollars (e.g. 8.50).''';
+{"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
+"form" is one entry from the form list above. "cuisine" is a short label
+(e.g. "Thai", "Tex-Mex", "Mediterranean"). "sides" names the vegetable side and
+any starch. "newBuys" is a short comma list (or "No new buys" if all from
+pantry). Cost fields are numbers in dollars (e.g. 8.50).''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 1500);
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 1800);
     final List<dynamic> opts = (data['options'] as List<dynamic>?) ?? <dynamic>[];
     final List<MealOption> out = opts
         .whereType<Map<String, dynamic>>()
@@ -305,6 +379,11 @@ Write the full recipe for "${option.title}" (${option.desc}) for $servings
 ${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
 like eggs as counts). Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
+${option.sides.isEmpty ? '' : '''
+THIS IS A WHOLE PLATE. The sides are part of the recipe, not an afterthought:
+"${option.sides}". Include their ingredients in the ingredient list and their
+steps in the method, sequenced so everything lands on the plate together
+(start what takes longest first; say when to start the side).'''}
 
 PANTRY (the complete list of what the user has on hand; prices are per gram or
 per unit):
@@ -579,13 +658,12 @@ USER PROFILE (hard rules — never violate):
   set of foods to keep out — treat it as exhaustive. Never avoid, refuse or
   quietly omit an ingredient that is NOT on it because you assume the user
   dislikes it. If something is not listed, it is fair game.
-- ACCEPTED PROTEINS ONLY:
-  * Chicken — ground, or breast. Breast MUST be chopped into pieces if pan-
-    cooked (he hates cooking a whole breast on a pan). Whole breast is fine in
-    the air fryer.
-  * Beef — ground, cube steak, flank/skirt steak.
-  * Ground turkey.
-  * Firm tofu.
+- PROTEINS: any protein is fair game unless it appears on the AVOID list —
+  chicken, turkey, beef, pork, fish, tofu, eggs, beans, whatever fits the dish.
+  There is NO fixed short list; roam. Two prep preferences that still hold:
+  * Chicken breast MUST be chopped into pieces if pan-cooked (he hates cooking a
+    whole breast on a pan). Whole breast is fine in the air fryer.
+  * Never suggest steak & eggs (he's sick of it).
 - EQUIPMENT: the user message lists the appliances this kitchen actually has.
   That list is the complete truth — treat anything not on it as unavailable.
   Never write a step that requires a missing appliance; adapt the method to
@@ -614,20 +692,26 @@ THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
 
 MEAL GENERATION RULES:
 1. Present exactly 3 options; the user picks one.
-2. Each of the 3 options uses a DIFFERENT protein.
-3. Never repeat a meal from the recent history you are given.
-4. Never suggest steak & eggs (he's sick of it).
-5. The 3 options must be genuinely different dishes — not 3 versions of one.
-6. Don't shoehorn the same ingredient into everything (he's called this out re:
+2. THREE DIFFERENT DINNERS. If he doesn't want the kind of thing option 1 is,
+   options 2 and 3 must still be real alternatives — never three meatball
+   dishes, never three sheet-pans, never three takes on one idea. Different
+   dish FORM, different cuisine, different protein (unless a specific request
+   points to one protein).
+3. Never repeat a meal from the recent history you are given, and steer away
+   from forms/dishes the history shows he's been eating a lot of.
+4. Every option is a WHOLE PLATE: main + a real vegetable side + optional
+   starch. Sides come from the pantry when it has vegetables; else new buys.
+5. Don't shoehorn the same ingredient into everything (he's called this out re:
    squash, carrots, cream cheese, soy sauce). Vary it.
-7. Don't force pantry items where they don't belong (no squash in egg foo
+6. Don't force pantry items where they don't belong (no squash in egg foo
    young). If a dish traditionally needs something he lacks, list it as a new buy.
-8. Prioritize [EXPIRING SOON] ingredients — build meals around them.
-9. High protein, low calorie — target ~28-40g protein and ~200-420 cal/serving.
-10. Minimize new purchases; prefer long-lasting new buys (spices, oils, sauces)
-    over perishables. Label new buys clearly.
-11. Don't ask whether he can go to the store — he can. Just include new buys.
-12. Respect the allergy and the AVOID list even if the pantry contains a
+7. Prioritize [EXPIRING SOON] ingredients — build meals around them.
+8. High protein, moderate calories — target ~28-40g protein and ~200-500
+   cal/serving for the WHOLE PLATE (main + sides).
+9. Minimize new purchases; prefer long-lasting new buys (spices, oils, sauces)
+   over perishables. Label new buys clearly.
+10. Don't ask whether he can go to the store — he can. Just include new buys.
+11. Respect the allergy and the AVOID list even if the pantry contains a
     forbidden item — but never invent extra restrictions beyond them.
 
 COST AWARENESS (the user shops on a budget):

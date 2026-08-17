@@ -74,4 +74,80 @@ void main() {
       expect(o.caloriesPerServing, 380);
     });
   });
+
+  group('three different dinners — the variety check', () {
+    MealOption opt(String title, String protein, String form, String cuisine) =>
+        MealOption(
+            title: title,
+            desc: '',
+            protein: protein,
+            form: form,
+            cuisine: cuisine,
+            newBuys: '',
+            proteinPerServing: 30,
+            caloriesPerServing: 400);
+
+    test('three meatball dishes is one choice wearing three hats', () {
+      final String why = optionsSimilarity(<MealOption>[
+        opt('Swedish Meatballs', 'ground beef', 'meatballs', 'Swedish'),
+        opt('Turkey Meatballs Marinara', 'ground turkey', 'meatballs', 'Italian'),
+        opt('Greek Lamb Meatballs', 'ground lamb', 'meatballs', 'Greek'),
+      ]);
+      expect(why, contains('dish form'));
+    });
+
+    test('genuinely different dinners pass', () {
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('Sheet-Pan Chicken & Veg', 'chicken', 'sheet-pan', 'Mediterranean'),
+            opt('Beef Stir-Fry', 'flank steak', 'stir-fry', 'Chinese'),
+            opt('Tofu Curry', 'firm tofu', 'curry', 'Thai'),
+          ]),
+          '');
+    });
+
+    test('same protein family is caught even when worded differently', () {
+      final String why = optionsSimilarity(<MealOption>[
+        opt('A', 'chicken breast', 'sheet-pan', 'Greek'),
+        opt('B', 'chicken thighs', 'stir-fry', 'Thai'),
+        opt('C', 'tofu', 'bowl', 'Korean'),
+      ]);
+      expect(why, contains('protein'));
+    });
+
+    test('a specific request may repeat the protein but not the form', () {
+      final List<MealOption> opts = <MealOption>[
+        opt('A', 'chicken', 'tacos or wraps', 'Mexican'),
+        opt('B', 'chicken', 'soup or stew', 'Thai'),
+        opt('C', 'chicken', 'sheet-pan', 'Greek'),
+      ];
+      expect(optionsSimilarity(opts, requireProteinVariety: false), '');
+      expect(optionsSimilarity(opts), contains('protein'));
+    });
+
+    test('form/cuisine casing and hyphens do not fool it', () {
+      final String why = optionsSimilarity(<MealOption>[
+        opt('A', 'beef', 'Sheet Pan', 'thai'),
+        opt('B', 'pork', 'sheet-pan', 'Thai'),
+        opt('C', 'tofu', 'bowl', 'Korean'),
+      ]);
+      expect(why, contains('dish form'));
+      expect(why, contains('cuisine'));
+    });
+
+    test('recent shapes are read off the history titles', () {
+      const MealHistory h = MealHistory(<String>[
+        'Sheet-Pan Lemon Chicken',
+        'Turkey Meatballs',
+        'Sheet Pan Sausage & Peppers',
+        'Beef Meatball Subs',
+        'Chicken Stir-Fry',
+        'Meatballs Marinara',
+      ]);
+      final List<String> hot = h.frequentShapes();
+      expect(hot.first, 'meatballs ×3');
+      expect(hot, contains('sheet-pan ×2'));
+      expect(hot, contains('chicken ×2'));
+    });
+  });
 }
