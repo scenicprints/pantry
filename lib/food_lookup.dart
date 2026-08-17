@@ -89,10 +89,15 @@ int foodMatchScore(String query, FoodHit h) {
   // The head-noun tier only applies to curated generic entries (they carry a
   // qualityBonus). A branded product's name has no taxonomy — without this
   // gate "Plantain Chips Sea Salt" would score like the whole food.
-  if (h.qualityBonus > 0 && _wordsIn(q, h.head)) {
+  // USDA puts the modifier AFTER the comma ("Peppers, bell, green, raw"), so
+  // the head only needs one of the query words as long as the full name
+  // carries them all — otherwise "bell peppers" loses to a brand named Bell.
+  if (h.qualityBonus > 0 &&
+      _wordsIn(q, h.head, any: true) &&
+      _wordsIn(q, h.full)) {
     s += 100;
     final List<String> headWords = _qWords(h.head);
-    if (headWords.length == q.length) {
+    if (headWords.length == q.length && _wordsIn(q, h.head)) {
       s += 30;
     }
   } else if (_wordsIn(q, h.full)) {
@@ -174,12 +179,15 @@ class UsdaGeneric {
     }
   }
 
+  /// Test seam for the raw-USDA-row parser.
+  static FoodHit? parseForTest(Map<String, dynamic> food) => _parse(food);
+
   static FoodHit? _parse(Map<String, dynamic> food) {
     final String desc = (food['description'] as String?)?.trim() ?? '';
     if (desc.isEmpty) {
       return null;
     }
-    double? kcal, prot, fat, carb;
+    double? kcal, atwaterGeneral, atwaterSpecific, prot, fat, carb;
     for (final dynamic fn
         in (food['foodNutrients'] as List<dynamic>?) ?? <dynamic>[]) {
       if (fn is! Map<String, dynamic>) {
@@ -194,6 +202,10 @@ class UsdaGeneric {
       switch (number) {
         case '208':
           kcal = value;
+        case '957':
+          atwaterGeneral = value;
+        case '958':
+          atwaterSpecific = value;
         case '203':
           prot = value;
         case '204':
@@ -201,6 +213,14 @@ class UsdaGeneric {
         case '205':
           carb = value;
       }
+    }
+    // Foundation Foods often report energy ONLY as Atwater 957/958 and omit
+    // 208 — "Peppers, bell, green, raw" is one. Requiring 208 silently
+    // deleted them from search. Fall back, then derive from the macros; a
+    // whole food is never dropped for lacking a particular energy row.
+    kcal ??= atwaterGeneral ?? atwaterSpecific;
+    if (kcal == null && (prot != null || fat != null || carb != null)) {
+      kcal = (prot ?? 0) * 4 + (fat ?? 0) * 9 + (carb ?? 0) * 4;
     }
     if (kcal == null) {
       return null;
