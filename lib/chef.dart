@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
+import 'avoid.dart';
 import 'chef_models.dart';
 import 'models.dart';
 import 'pricebook.dart';
@@ -223,8 +224,11 @@ class Chef {
   }) async {
     final String req = request?.trim() ?? '';
     final bool hasReq = req.isNotEmpty;
-    // Ask, check, and if the three came back as one dinner in three hats,
-    // ask once more with the specific complaint attached.
+    final List<String> avoids = await ChefKeys.getAvoids();
+    // Ask, check, and if the three came back as one dinner in three hats — or
+    // with a food he doesn't eat — ask again with the specific complaint
+    // attached. An avoid violation is a hard failure, so it gets a second
+    // retry; variety alone gets one.
     List<MealOption> out = await _askOptions(
         pantry: pantry,
         servings: servings,
@@ -233,9 +237,10 @@ class Chef {
         request: req,
         justShown: justShown,
         recentForms: recentForms);
-    final String problem =
-        optionsSimilarity(out, requireProteinVariety: !hasReq);
-    if (problem.isNotEmpty) {
+    String problem = _optionsProblem(out, avoids, requireProteinVariety: !hasReq);
+    int attemptsLeft = optionsAvoidHits(out, avoids).isEmpty ? 1 : 2;
+    while (problem.isNotEmpty && attemptsLeft > 0) {
+      attemptsLeft--;
       try {
         final List<MealOption> retry = await _askOptions(
             pantry: pantry,
@@ -246,15 +251,61 @@ class Chef {
             justShown: justShown,
             recentForms: recentForms,
             complaint: problem);
-        if (optionsSimilarity(retry, requireProteinVariety: !hasReq).length <
-            problem.length) {
+        if (_isBetter(retry, out, avoids, requireProteinVariety: !hasReq)) {
           out = retry;
         }
+        final String next =
+            _optionsProblem(out, avoids, requireProteinVariety: !hasReq);
+        if (optionsAvoidHits(out, avoids).isEmpty) {
+          problem = ''; // the hard rule is satisfied; stop spending calls
+        } else {
+          problem = next;
+        }
       } on ChefException {
-        // Keep the first set rather than fail the whole ask.
+        break; // keep what we have rather than fail the whole ask
       }
     }
-    return out;
+    // Last line of defence: never hand back a meal built on a food he
+    // avoids, however many times the model insists on it.
+    final List<MealOption> clean = out
+        .where((MealOption o) => optionAvoidHits(o, avoids).isEmpty)
+        .toList();
+    if (clean.isEmpty) {
+      final String named =
+          optionsAvoidHits(out, avoids).map((AvoidHit h) => h.term).join(', ');
+      throw ChefException(named.isEmpty
+          ? 'The chef returned no usable options — try again.'
+          : 'Every idea the chef came back with used $named, which is on your '
+              'avoid list. Try again.');
+    }
+    return clean;
+  }
+
+  /// Everything wrong with a set of options, worst first: a food on the avoid
+  /// list is a hard failure, three-dinners-in-one-hat is the softer one.
+  static String _optionsProblem(List<MealOption> opts, List<String> avoids,
+      {required bool requireProteinVariety}) {
+    final List<String> parts = <String>[
+      avoidComplaint(optionsAvoidHits(opts, avoids)),
+      optionsSimilarity(opts, requireProteinVariety: requireProteinVariety),
+    ].where((String s) => s.isNotEmpty).toList();
+    return parts.join('; ');
+  }
+
+  /// Is [a] a better set than [b]? Fewer avoid violations always wins; ties
+  /// go to the more varied set.
+  static bool _isBetter(List<MealOption> a, List<MealOption> b,
+      List<String> avoids,
+      {required bool requireProteinVariety}) {
+    final int badA = optionsAvoidHits(a, avoids).length;
+    final int badB = optionsAvoidHits(b, avoids).length;
+    if (badA != badB) {
+      return badA < badB;
+    }
+    return optionsSimilarity(a, requireProteinVariety: requireProteinVariety)
+            .length <
+        optionsSimilarity(b, requireProteinVariety: requireProteinVariety)
+            .length;
   }
 
   static Future<List<MealOption>> _askOptions({
@@ -308,8 +359,10 @@ EQUIPMENT — the ONLY appliances in this kitchen. Never propose a meal that
 needs anything not on this list:
 $equipment
 
-AVOID — the COMPLETE list of foods to keep out of these meals. Nothing else is
-off limits: do NOT refuse or omit any other ingredient on taste grounds.
+AVOID — the COMPLETE list of foods to keep out of these meals. Each entry
+covers its whole group, not just the words written: no option may use anything
+listed under it. Nothing else is off limits: do NOT refuse or omit any other
+ingredient on taste grounds.
 $avoids
 
 RECENTLY MADE${hasReq ? ' (context only — you MAY reuse one if it matches the request)' : ' — do NOT repeat any of these'}:
@@ -324,8 +377,9 @@ options may resemble them (not the same dish, form, or spin):
 ${justShown.map((String t) => '- $t').join('\n')}'''}
 ${complaint.isEmpty ? '' : '''
 
-YOUR LAST ATTEMPT FAILED THE VARIETY CHECK: $complaint. Fix that — the three
-options must be three genuinely different dinners.'''}
+YOUR LAST ATTEMPT WAS REJECTED: $complaint. Fix that. The three options must be
+three genuinely different dinners, and nothing on the AVOID list (or in a group
+it names) may appear in any of them.'''}
 
 Cooking for $servings ${servings == 1 ? 'person' : 'people'}.
 
@@ -365,11 +419,48 @@ pantry). Cost fields are numbers in dollars (e.g. 8.50).''';
   }
 
   // ── Call 2: full recipe ───────────────────────────────────────────────
+  // The picked option is already clear of the avoid list, but the recipe can
+  // still smuggle a forbidden food into the method (an anchovy in the
+  // dressing, butter in the pan). Same deal as the options: check, re-ask
+  // once with the complaint, and refuse rather than hand over a recipe he
+  // can't eat.
   static Future<Recipe> generateRecipe({
     required MealOption option,
     required int servings,
     required List<PantryItem> pantry,
     PriceBook prices = const PriceBook(),
+  }) async {
+    final List<String> avoids = await ChefKeys.getAvoids();
+    Recipe out = await _askRecipe(
+        option: option, servings: servings, pantry: pantry, prices: prices);
+    List<AvoidHit> hits = recipeAvoidHits(out, avoids);
+    if (hits.isNotEmpty) {
+      final Recipe retry = await _askRecipe(
+          option: option,
+          servings: servings,
+          pantry: pantry,
+          prices: prices,
+          complaint: avoidComplaint(hits));
+      final List<AvoidHit> retryHits = recipeAvoidHits(retry, avoids);
+      if (retryHits.length < hits.length) {
+        out = retry;
+        hits = retryHits;
+      }
+    }
+    if (hits.isNotEmpty) {
+      throw ChefException(
+          'The chef kept putting ${hits.map((AvoidHit h) => h.term).join(', ')} '
+          'in this recipe, which is on your avoid list. Pick another option.');
+    }
+    return out;
+  }
+
+  static Future<Recipe> _askRecipe({
+    required MealOption option,
+    required int servings,
+    required List<PantryItem> pantry,
+    PriceBook prices = const PriceBook(),
+    String complaint = '',
   }) async {
     final String knownPrices = formatKnownPrices(prices, pantry);
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
@@ -397,9 +488,14 @@ EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
 with these; never instruct the user to use anything else:
 $equipment
 
-AVOID — the COMPLETE list of foods to keep out of this recipe. Nothing else is
-off limits on taste grounds.
+AVOID — the COMPLETE list of foods to keep out of this recipe. Each entry
+covers its whole group, not just the words written. Nothing else is off limits
+on taste grounds.
 $avoids
+${complaint.isEmpty ? '' : '''
+
+YOUR LAST ATTEMPT BROKE THE AVOID LIST: $complaint. Rewrite the recipe without
+it — swap in something the list allows, or change the dish.'''}
 
 For every ingredient NOT in that pantry list, append " (new buy)" to its name in
 the ingredients list. Do not imply the user already has anything not listed.
@@ -603,15 +699,10 @@ new buys, and storage/pro tips. Cost fields are numbers in dollars (e.g. 12.75).
     return sb.toString().trimRight();
   }
 
-  /// The complete avoid list for the prompt, one per line.
-  static String formatAvoids(List<String> avoid) {
-    final List<String> live =
-        avoid.where((String a) => a.trim().isNotEmpty).toList();
-    if (live.isEmpty) {
-      return '(nothing — no food is off limits beyond the allergy above)';
-    }
-    return live.map((String a) => '- $a').join('\n');
-  }
+  /// The complete avoid list for the prompt, one per line, each category
+  /// spelled out into the foods it covers. "All seafood" on its own read as
+  /// a phrase, and the chef offered salmon.
+  static String formatAvoids(List<String> avoid) => formatAvoidsForPrompt(avoid);
 
   /// The user's appliances, one per line, with a capability note where it
   /// changes how the dish should be cooked (e.g. the Tovala's steam cycles).
@@ -658,9 +749,16 @@ USER PROFILE (hard rules — never violate):
   set of foods to keep out — treat it as exhaustive. Never avoid, refuse or
   quietly omit an ingredient that is NOT on it because you assume the user
   dislikes it. If something is not listed, it is fair game.
-- PROTEINS: any protein is fair game unless it appears on the AVOID list —
-  chicken, turkey, beef, pork, fish, tofu, eggs, beans, whatever fits the dish.
-  There is NO fixed short list; roam. Two prep preferences that still hold:
+- AVOID LIST ENTRIES ARE CATEGORIES, NOT WORDS. An entry rules out every food
+  in that group, not just dishes that spell the entry out. "All seafood" rules
+  out salmon, cod, tuna, crab, anchovy, fish sauce and every other fish or
+  shellfish. "Dairy" rules out butter, cheese and cream. The entries in the
+  user message name the members they cover — read them and obey the whole
+  group. An ingredient being unnamed there is not a loophole.
+- PROTEINS: any protein is fair game unless it appears on the AVOID list, or
+  belongs to a group on it. There is NO fixed short list; roam widely across
+  meat, poultry, seafood, dairy, legumes and eggs — minus whatever the AVOID
+  list takes off the table. Two prep preferences that still hold:
   * Chicken breast MUST be chopped into pieces if pan-cooked (he hates cooking a
     whole breast on a pan). Whole breast is fine in the air fryer.
   * Never suggest steak & eggs (he's sick of it).
