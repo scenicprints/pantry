@@ -106,12 +106,25 @@ void main() {
           '');
     });
 
-    test('same protein family is caught even when worded differently', () {
+    test('two chicken dinners are fine when they are different dishes', () {
+      // The old bar was all three axes different, every time. Nothing
+      // ordinary satisfies that, so the chef went looking for strange food.
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('A', 'chicken breast', 'sheet-pan', 'Greek'),
+            opt('B', 'chicken thighs', 'stir-fry', 'Thai'),
+            opt('C', 'tofu', 'bowl', 'Korean'),
+          ]),
+          '');
+    });
+
+    test('same protein AND same form is still one dinner twice', () {
       final String why = optionsSimilarity(<MealOption>[
         opt('A', 'chicken breast', 'sheet-pan', 'Greek'),
-        opt('B', 'chicken thighs', 'stir-fry', 'Thai'),
+        opt('B', 'chicken thighs', 'sheet-pan', 'Thai'),
         opt('C', 'tofu', 'bowl', 'Korean'),
       ]);
+      expect(why, contains('dish form'));
       expect(why, contains('protein'));
     });
 
@@ -133,6 +146,35 @@ void main() {
       ]);
       expect(why, contains('dish form'));
       expect(why, contains('cuisine'));
+    });
+
+    test('one shared axis out of three is allowed now', () {
+      // Two sheet-pans is fine if they are different food; two Thai dishes
+      // is fine if they are different dishes.
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('A', 'beef', 'sheet-pan', 'Mexican'),
+            opt('B', 'chicken', 'sheet-pan', 'Greek'),
+            opt('C', 'tofu', 'bowl', 'Korean'),
+          ]),
+          '');
+    });
+
+    test('all three on one axis still fails however the rest varies', () {
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('A', 'beef', 'sheet-pan', 'Mexican'),
+            opt('B', 'chicken', 'sheet-pan', 'Greek'),
+            opt('C', 'tofu', 'sheet-pan', 'Korean'),
+          ]),
+          contains('dish form'));
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('A', 'beef', 'skillet', 'Thai'),
+            opt('B', 'chicken', 'bowl', 'Thai'),
+            opt('C', 'tofu', 'curry', 'Thai'),
+          ]),
+          contains('cuisine'));
     });
 
     test('recent shapes are read off the history titles', () {

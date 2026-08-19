@@ -10,24 +10,24 @@ import 'dart:convert';
 /// One of the 3 options the user picks from.
 /// The dish forms the chef must choose from. Three options must each use a
 /// different one — this is what "genuinely different" means, mechanically.
+// Everyday forms only. "braise", "stuffed or rolled" and "flatbread or pizza"
+// came out — with three-different-forms enforced every night, the list itself
+// decided how strange dinner got.
 const List<String> kDishForms = <String>[
   'sheet-pan',
   'stir-fry',
   'skillet',
   'bowl',
   'soup or stew',
-  'braise',
   'salad-as-a-meal',
   'tacos or wraps',
   'pasta or noodles',
   'roast',
   'grill',
   'air fryer basket',
-  'stuffed or rolled',
   'burger or patty',
   'meatballs',
   'casserole or bake',
-  'flatbread or pizza',
   'curry',
 ];
 
@@ -109,6 +109,12 @@ String proteinFamily(String protein) {
 /// Why a set of options fails the "three different dinners" bar — '' when
 /// it passes. Checked app-side because the model reads "genuinely different"
 /// as "different sauce on the same meatball".
+///
+/// The bar used to be all three axes different, every time. Nothing ordinary
+/// satisfies that, so the chef went hunting for strange dishes to fill the
+/// third slot. Now a pair only fails when it matches on TWO of the three
+/// axes — two chicken dinners are fine if they are actually different dishes
+/// — plus the whole set may not share any single axis.
 String optionsSimilarity(List<MealOption> opts, {bool requireProteinVariety = true}) {
   if (opts.length < 2) {
     return '';
@@ -119,20 +125,49 @@ String optionsSimilarity(List<MealOption> opts, {bool requireProteinVariety = tr
   final List<String> cuisines =
       opts.map((MealOption o) => _norm(o.cuisine)).toList();
   final List<String> problems = <String>[];
-  if (forms.any((String f) => f.isNotEmpty) &&
-      forms.toSet().length < forms.where((String f) => f.isNotEmpty).length) {
-    problems.add('two options share the same dish form (${forms.join(' / ')})');
+
+  // Two options alike on two axes are one dinner in a different hat.
+  for (int i = 0; i < opts.length; i++) {
+    for (int j = i + 1; j < opts.length; j++) {
+      final List<String> shared = <String>[
+        if (forms[i].isNotEmpty && forms[i] == forms[j])
+          'dish form (${forms[i]})',
+        if (cuisines[i].isNotEmpty && cuisines[i] == cuisines[j])
+          'cuisine (${cuisines[i]})',
+        if (requireProteinVariety &&
+            proteins[i].isNotEmpty &&
+            proteins[i] == proteins[j])
+          'protein (${proteins[i]})',
+      ];
+      if (shared.length >= 2) {
+        problems.add('"${opts[i].title}" and "${opts[j].title}" share '
+            '${shared.join(' and ')}');
+      }
+    }
   }
-  if (requireProteinVariety &&
-      proteins.any((String p) => p.isNotEmpty) &&
-      proteins.toSet().length < proteins.where((String p) => p.isNotEmpty).length) {
-    problems.add('two options share a protein (${proteins.join(' / ')})');
-  }
-  if (cuisines.any((String c) => c.isNotEmpty) &&
-      cuisines.toSet().length < cuisines.where((String c) => c.isNotEmpty).length) {
-    problems.add('two options share a cuisine (${cuisines.join(' / ')})');
+
+  // And a set that agrees on any one axis is still one dinner, however the
+  // rest varies — three meatball plates, three Thai dishes, three chickens.
+  for (final String p in <String>[
+    _allShare(forms, 'dish form'),
+    _allShare(cuisines, 'cuisine'),
+    if (requireProteinVariety) _allShare(proteins, 'protein'),
+  ]) {
+    if (p.isNotEmpty) {
+      problems.add(p);
+    }
   }
   return problems.join('; ');
+}
+
+/// '' unless every option carries the same value on this axis.
+String _allShare(List<String> values, String label) {
+  if (values.length < 2 || values.any((String v) => v.isEmpty)) {
+    return '';
+  }
+  return values.toSet().length == 1
+      ? 'all of them share one $label (${values.first})'
+      : '';
 }
 
 /// One ingredient row. [amount] is a display string ("300 g", "2", "1 tbsp");

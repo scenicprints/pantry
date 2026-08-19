@@ -330,24 +330,34 @@ The user has a SPECIFIC REQUEST for this meal:
 "$req"
 
 Propose exactly 3 options that satisfy this request as closely as possible while
-still obeying EVERY hard rule (allergy, AVOID list). They must still be THREE
-DIFFERENT DINNERS — different dish FORM and different cuisine/flavor family — but
-they do NOT need different proteins if the request points to one. Use pantry
-items where they fit; new buys are expected and fine to fulfil the request. Only
-prioritize an [EXPIRING SOON] item if it suits the request.'''
+still obeying EVERY hard rule (allergy, AVOID list). They must be three ordinary
+dinners a home cook would recognise, and three different ones: no two alike on
+both dish FORM and cuisine, and not all three on either. They do NOT need
+different proteins if the request points to one. Use pantry items where they
+fit; new buys are expected and fine to fulfil the request. Only prioritize an
+[EXPIRING SOON] item if it suits the request.'''
         : '''
-Propose exactly 3 dinner options — THREE DIFFERENT DINNERS, not three versions
-of one. Concretely, all three must differ on EVERY one of these axes:
-  • dish FORM — pick each from: $formList. No two options may share a form.
-  • CUISINE / flavor family — no two the same.
-  • primary PROTEIN — no two the same. Any protein is allowed unless it is on
-    the AVOID list; do not restrict yourself to a short list of "usual" ones.
-Prioritize any [EXPIRING SOON] ingredient. Follow every hard rule.''';
+Propose exactly 3 dinner options. Every one of them must be an ordinary dinner
+a home cook would recognise and could name in a few plain words — the kind of
+thing that turns up on a weeknight table.
+
+They also have to be three different dinners, judged on three axes:
+  • dish FORM — pick each from: $formList.
+  • CUISINE / flavor family.
+  • primary PROTEIN — any protein not on the AVOID list.
+The bar is: no two options may match on TWO of those axes, and all three may
+not share any single one. Two chicken dinners are fine when they are genuinely
+different dishes. Three chicken dinners, or three sheet-pans, are not.
+
+Being different is the lower priority of the two. Never reach for an unusual
+dish, a fusion, or an exotic ingredient to make the three look varied — a
+plain, familiar third option beats a clever one every time. Use any
+[EXPIRING SOON] ingredient in whichever option it honestly belongs in.''';
 
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
-CURRENT PANTRY (what's in stock — [EXPIRING SOON] items must be prioritized;
-prices shown are per gram or per unit):
+CURRENT PANTRY (what's in stock — use [EXPIRING SOON] items where they fit,
+never by forcing them; prices shown are per gram or per unit):
 ${formatPantry(pantry)}
 ${knownPrices.isEmpty ? '' : '''
 
@@ -377,18 +387,20 @@ options may resemble them (not the same dish, form, or spin):
 ${justShown.map((String t) => '- $t').join('\n')}'''}
 ${complaint.isEmpty ? '' : '''
 
-YOUR LAST ATTEMPT WAS REJECTED: $complaint. Fix that. The three options must be
-three genuinely different dinners, and nothing on the AVOID list (or in a group
-it names) may appear in any of them.'''}
+YOUR LAST ATTEMPT WAS REJECTED: $complaint. Fix that by swapping in a different
+ORDINARY dinner, not a stranger one. Nothing on the AVOID list (or in a group it
+names) may appear in any option.'''}
 
 Cooking for $servings ${servings == 1 ? 'person' : 'people'}.
 
 $task
 
-EVERY OPTION IS A WHOLE PLATE, not just a main: a main + a real VEGETABLE side
-(an actual vegetable dish, not a garnish) + an optional starch. Build sides from
-pantry vegetables when there are any; otherwise name them as new buys. Nutrition
-and cost figures are for the whole plate. Put the side(s) in "sides".
+SIDES ARE OPTIONAL. Add a simple vegetable side (and a starch) only where the
+meal genuinely wants one — a stew, a curry or a loaded bowl is already dinner
+and needs nothing bolted on. When you do add one, keep it plain: roasted,
+steamed or a quick salad, built from pantry vegetables when there are any.
+Leave "sides" empty when the dish stands on its own. Nutrition and cost figures
+cover whatever is on the plate.
 
 The pantry above is the COMPLETE list of what the user has. Everything else —
 including any protein, oil, spice, or staple — is a NEW BUY. Do not claim the
@@ -403,8 +415,9 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
 "form" is one entry from the form list above. "cuisine" is a short label
 (e.g. "Thai", "Tex-Mex", "Mediterranean"). "sides" names the vegetable side and
-any starch. "newBuys" is a short comma list (or "No new buys" if all from
-pantry). Cost fields are numbers in dollars (e.g. 8.50).''';
+any starch, or is "" when the dish needs none. "newBuys" is a short comma list
+(or "No new buys" if all from pantry). Cost fields are numbers in dollars
+(e.g. 8.50).''';
 
     final Map<String, dynamic> data = await _post(user: user, maxTokens: 1800);
     final List<dynamic> opts = (data['options'] as List<dynamic>?) ?? <dynamic>[];
@@ -470,11 +483,13 @@ Write the full recipe for "${option.title}" (${option.desc}) for $servings
 ${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
 like eggs as counts). Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
+Keep it as simple as the dish honestly allows: as few steps and as few
+ingredients as the dish actually needs, and no technique a home cook on a
+weeknight wouldn't use. Do not pad the method to look thorough.
 ${option.sides.isEmpty ? '' : '''
-THIS IS A WHOLE PLATE. The sides are part of the recipe, not an afterthought:
-"${option.sides}". Include their ingredients in the ingredient list and their
-steps in the method, sequenced so everything lands on the plate together
-(start what takes longest first; say when to start the side).'''}
+The side is part of this recipe: "${option.sides}". Include its ingredients and
+its steps, sequenced so everything lands together (start what takes longest
+first; say when to start the side). Keep the side plain — it is a side.'''}
 
 PANTRY (the complete list of what the user has on hand; prices are per gram or
 per unit):
@@ -790,26 +805,42 @@ THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
 
 MEAL GENERATION RULES:
 1. Present exactly 3 options; the user picks one.
-2. THREE DIFFERENT DINNERS. If he doesn't want the kind of thing option 1 is,
-   options 2 and 3 must still be real alternatives — never three meatball
-   dishes, never three sheet-pans, never three takes on one idea. Different
-   dish FORM, different cuisine, different protein (unless a specific request
-   points to one protein).
-3. Never repeat a meal from the recent history you are given, and steer away
+2. REGULAR FOOD. This is the rule that outranks the rest. Every option is an
+   ordinary dinner a home cook would recognise and could name in a few plain
+   words — the sort of thing that turns up on a weeknight table. Cook a dish
+   as its own cuisine; never invent a fusion, never mash two cuisines onto one
+   plate, never build a dish around a novelty ingredient. If the title needs a
+   clause to explain itself, it is the wrong dish. Simple beats clever, and a
+   familiar dinner beats an interesting one every single time.
+3. THREE DIFFERENT DINNERS, but never at the cost of rule 2. Judge it on dish
+   FORM, cuisine, and protein: no two options alike on two of those three, and
+   not all three sharing any one of them — no three meatball dishes, no three
+   sheet-pans. Two chicken dinners that are actually different dishes are fine.
+   If the only way to make a third option "different" is to make it strange,
+   make it ordinary instead.
+4. Never repeat a meal from the recent history you are given, and steer away
    from forms/dishes the history shows he's been eating a lot of.
-4. Every option is a WHOLE PLATE: main + a real vegetable side + optional
-   starch. Sides come from the pantry when it has vegetables; else new buys.
-5. Don't shoehorn the same ingredient into everything (he's called this out re:
-   squash, carrots, cream cheese, soy sauce). Vary it.
-6. Don't force pantry items where they don't belong (no squash in egg foo
-   young). If a dish traditionally needs something he lacks, list it as a new buy.
-7. Prioritize [EXPIRING SOON] ingredients — build meals around them.
-8. High protein, moderate calories — target ~28-40g protein and ~200-500
-   cal/serving for the WHOLE PLATE (main + sides).
-9. Minimize new purchases; prefer long-lasting new buys (spices, oils, sauces)
-   over perishables. Label new buys clearly.
-10. Don't ask whether he can go to the store — he can. Just include new buys.
-11. Respect the allergy and the AVOID list even if the pantry contains a
+5. Sides are optional. Add a simple vegetable side, and a starch, only when the
+   meal actually wants one — a stew or a curry is already dinner. Keep any side
+   plain, and build it from pantry vegetables when there are any.
+6. THE PANTRY IS A CONVENIENCE, NOT A CONSTRAINT. Use what fits the dish and
+   buy the rest. One or two ordinary new buys always beats bending a dish
+   around what happens to be in the cupboard. Never assemble a meal out of
+   whatever is on hand if the result is something nobody would choose to eat.
+7. Following from that: don't shoehorn one ingredient into everything (he's
+   called this out re: squash, carrots, cream cheese, soy sauce), and don't
+   force pantry items where they don't belong (no squash in egg foo young).
+   If a dish traditionally needs something he lacks, list it as a new buy.
+8. Use [EXPIRING SOON] ingredients in whichever option they honestly belong in.
+   Do not build a dish around one that doesn't want it — a wasted zucchini is
+   cheaper than a dinner he won't eat.
+9. High protein, moderate calories — target ~28-40g protein and ~200-500
+   cal/serving for everything on the plate.
+10. Keep new purchases sensible; prefer long-lasting new buys (spices, oils,
+    sauces) over perishables. Label new buys clearly. Cheaper is better, but
+    never at the cost of rule 2 — a strange dinner is not a saving.
+11. Don't ask whether he can go to the store — he can. Just include new buys.
+12. Respect the allergy and the AVOID list even if the pantry contains a
     forbidden item — but never invent extra restrictions beyond them.
 
 COST AWARENESS (the user shops on a budget):
