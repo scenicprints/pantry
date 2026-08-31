@@ -1605,12 +1605,9 @@ class _AddItemPageState extends State<AddItemPage> {
       initialDate: now,
       firstDate: DateTime(now.year - 1),
       lastDate: DateTime(now.year + 5),
-      builder: (BuildContext ctx, Widget? child) => Theme(
-        data: Theme.of(ctx).copyWith(
-            colorScheme: const ColorScheme.dark(
-                primary: kAccent, onPrimary: Colors.white, surface: kCard)),
-        child: child!,
-      ),
+      // No local theme override here: the app theme's datePickerTheme owns
+      // these colours. A ColorScheme.dark override used to live here and made
+      // every day number white on the white dialog.
     );
     if (d != null) {
       setState(() => _expiration =
@@ -2108,6 +2105,9 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
   int _reqId = 0; // guards against out-of-order responses
   bool _loading = false;
   bool _searched = false;
+  // Default ON: looking a food up to put in the pantry almost always means the
+  // food itself ("onion"), not a package with a brand on it.
+  bool _wholeFoods = true;
   List<ProductInfo> _results = <ProductInfo>[];
 
   @override
@@ -2138,7 +2138,7 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
     });
     List<ProductInfo> res = <ProductInfo>[];
     try {
-      res = await FoodSearch.search(v);
+      res = await FoodSearch.search(v, wholeFoodsOnly: _wholeFoods);
     } catch (_) {}
     if (!mounted || id != _reqId) {
       return; // a newer query superseded this one
@@ -2188,8 +2188,64 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
             ),
           ),
         ),
+        _sourceBar(),
         Expanded(child: _body(bottomPad)),
       ]),
+    );
+  }
+
+  /// Whole foods / All foods. Self-sizing pills, not ChoiceChip — see the
+  /// v0.6.1 pantry filter fix, where the Material chip clipped its own label.
+  Widget _sourceBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+      child: Row(children: [
+        _srcChip('Whole foods', true),
+        _srcChip('All foods', false),
+        const Spacer(),
+        if (_wholeFoods)
+          Text('no brands', style: mono(size: 11, color: kFaint)),
+      ]),
+    );
+  }
+
+  Widget _srcChip(String label, bool wholeFoods) {
+    final bool selected = _wholeFoods == wholeFoods;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Material(
+        color: selected ? kAccent.withValues(alpha: 0.18) : kCard,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: selected
+              ? null
+              : () {
+                  setState(() => _wholeFoods = wholeFoods);
+                  final String v = _q.text;
+                  if (v.trim().length >= 2) {
+                    _debounce?.cancel();
+                    _run(v); // re-run the same query against the new source
+                  }
+                },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: selected ? kAccent : kBorder)),
+            child: Text(label,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.visible,
+                style: TextStyle(
+                    fontSize: 13,
+                    height: 1.0,
+                    color: selected ? kAccent : kMuted,
+                    fontWeight:
+                        selected ? FontWeight.w600 : FontWeight.w500)),
+          ),
+        ),
+      ),
     );
   }
 
@@ -2201,7 +2257,11 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text('Type a food name — whole foods first, brands after.',
+          child: Text(
+              _wholeFoods
+                  ? 'Type a food name — the food itself, raw or cooked. '
+                      'No brands, no packaged snacks.'
+                  : 'Type a food name — whole foods first, brands after.',
               textAlign: TextAlign.center,
               style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
         ),
@@ -2211,8 +2271,13 @@ class _FoodSearchPageState extends State<FoodSearchPage> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(32),
-          child: Text('No matches. Try a different name, or scan the '
-              'barcode / label instead.',
+          child: Text(
+              _wholeFoods
+                  ? 'No whole-food match. Try a different name, switch to '
+                      'All foods to include brands, or scan the barcode / '
+                      'label instead.'
+                  : 'No matches. Try a different name, or scan the '
+                      'barcode / label instead.',
               textAlign: TextAlign.center,
               style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
         ),

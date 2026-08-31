@@ -69,7 +69,14 @@ void main() {
 
     test('formats one per line for the prompt', () {
       final String s = Chef.formatAvoids(<String>['Pork', 'Mushrooms']);
-      expect(s, '- Pork\n- Mushrooms');
+      // Since v0.13.1 a known group also carries its expansion on the
+      // same line, so this asserts the shape — one entry per line, each
+      // led by its own name — not the exact string. avoid_test.dart
+      // covers the expansion itself.
+      final List<String> lines = s.split('\n');
+      expect(lines, hasLength(2));
+      expect(lines[0], startsWith('- Pork'));
+      expect(lines[1], startsWith('- Mushrooms'));
     });
 
     test('an emptied list says nothing is off limits', () {
@@ -79,7 +86,10 @@ void main() {
     });
 
     test('blank entries are skipped', () {
-      expect(Chef.formatAvoids(<String>['Pork', '', '   ']), '- Pork');
+      final List<String> lines =
+          Chef.formatAvoids(<String>['Pork', '', '   ']).split('\n');
+      expect(lines, hasLength(1));
+      expect(lines.single, startsWith('- Pork'));
     });
 
     test('removing yogurt from the list removes it from the prompt', () {

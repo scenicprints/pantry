@@ -28,6 +28,8 @@ ThemeData buildPantryTheme() {
       onPrimary: Colors.white,
       surface: kCard,
       onSurface: kInk,
+      onSurfaceVariant: kMuted,
+      outline: kBorder,
       secondary: kOlive,
     ),
   );
@@ -45,6 +47,45 @@ ThemeData buildPantryTheme() {
       contentTextStyle: TextStyle(color: kCard),
       behavior: SnackBarBehavior.floating,
     ),
+    datePickerTheme: _datePickerTheme(),
+  );
+}
+
+// The expiration-date calendar. This is themed explicitly rather than left to
+// Material's defaults because it once shipped with a *dark* ColorScheme whose
+// surface was overridden to the app's near-white card — white day numbers on a
+// white dialog, so no date could be read or picked. Every foreground colour
+// below is stated against a known background for that reason.
+DatePickerThemeData _datePickerTheme() {
+  Color dayFg(Set<WidgetState> st) {
+    if (st.contains(WidgetState.disabled)) {
+      return kFaint;
+    }
+    return st.contains(WidgetState.selected) ? Colors.white : kInk;
+  }
+
+  Color? daySelectedBg(Set<WidgetState> st) =>
+      st.contains(WidgetState.selected) ? kAccent : null;
+
+  return DatePickerThemeData(
+    backgroundColor: kCard,
+    surfaceTintColor: Colors.transparent,
+    headerBackgroundColor: kAccent,
+    headerForegroundColor: Colors.white,
+    dividerColor: kBorder,
+    weekdayStyle: mono(size: 12, weight: FontWeight.w600, color: kMuted),
+    dayStyle: mono(size: 13),
+    dayForegroundColor: WidgetStateProperty.resolveWith(dayFg),
+    dayBackgroundColor: WidgetStateProperty.resolveWith(daySelectedBg),
+    todayForegroundColor: WidgetStateProperty.resolveWith(
+        (Set<WidgetState> st) =>
+            st.contains(WidgetState.selected) ? Colors.white : kAccent),
+    todayBackgroundColor: WidgetStateProperty.resolveWith(daySelectedBg),
+    todayBorder: const BorderSide(color: kAccent, width: 1.4),
+    yearForegroundColor: WidgetStateProperty.resolveWith(dayFg),
+    yearBackgroundColor: WidgetStateProperty.resolveWith(daySelectedBg),
+    cancelButtonStyle: TextButton.styleFrom(foregroundColor: kMuted),
+    confirmButtonStyle: TextButton.styleFrom(foregroundColor: kAccent),
   );
 }
 

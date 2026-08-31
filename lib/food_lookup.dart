@@ -111,10 +111,18 @@ int foodMatchScore(String query, FoodHit h) {
 
 /// Merged, ranked search across USDA generics + Open Food Facts.
 class FoodSearch {
-  static Future<List<ProductInfo>> search(String query) async {
+  /// When [wholeFoodsOnly] is true, Open Food Facts is not queried at all.
+  /// OFF is a *branded* database, so it is the sole source of the brand names
+  /// and packaged snacks that bury a plain "onion" — dropping it leaves only
+  /// USDA's generic datasets, i.e. the food itself, raw or cooked.
+  static Future<List<ProductInfo>> search(String query,
+      {bool wholeFoodsOnly = false}) async {
     final List<List<FoodHit>> pages = await Future.wait(<Future<List<FoodHit>>>[
       UsdaGeneric.search(query).catchError((Object _) => <FoodHit>[]),
-      OpenFoodFacts.searchHits(query).catchError((Object _) => <FoodHit>[]),
+      if (wholeFoodsOnly)
+        Future<List<FoodHit>>.value(<FoodHit>[])
+      else
+        OpenFoodFacts.searchHits(query).catchError((Object _) => <FoodHit>[]),
     ]);
     final List<FoodHit> all = <FoodHit>[...pages[0], ...pages[1]];
     final List<int> order = List<int>.generate(all.length, (int i) => i);
