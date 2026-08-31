@@ -41,6 +41,11 @@ class MealOption {
   final String newBuys; // "" or "No new buys" when all from pantry
   final double proteinPerServing;
   final double caloriesPerServing;
+  // The liver numbers, grams per serving. 0 across all three means the chef
+  // didn't report them (see liver.dart), not that the dish is perfect.
+  final double satFatPerServing;
+  final double addedSugarPerServing;
+  final double fiberPerServing;
   final double estCostTotal; // estimated whole-meal cost (0 = not provided)
   final double estCostPerServing; // estimated cost per serving
 
@@ -54,6 +59,9 @@ class MealOption {
     required this.newBuys,
     required this.proteinPerServing,
     required this.caloriesPerServing,
+    this.satFatPerServing = 0,
+    this.addedSugarPerServing = 0,
+    this.fiberPerServing = 0,
     this.estCostTotal = 0,
     this.estCostPerServing = 0,
   });
@@ -68,6 +76,9 @@ class MealOption {
         newBuys: (j['newBuys'] as String?)?.trim() ?? '',
         proteinPerServing: _num(j['proteinPerServing']),
         caloriesPerServing: _num(j['caloriesPerServing']),
+        satFatPerServing: _num(j['satFatPerServing']),
+        addedSugarPerServing: _num(j['addedSugarPerServing']),
+        fiberPerServing: _num(j['fiberPerServing']),
         estCostTotal: _num(j['estCostTotal']),
         estCostPerServing: _num(j['estCostPerServing']),
       );

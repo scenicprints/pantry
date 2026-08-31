@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 
 import 'avoid.dart';
 import 'chef_models.dart';
+import 'liver.dart';
 import 'models.dart';
 import 'pricebook.dart';
 
@@ -282,18 +283,20 @@ class Chef {
   }
 
   /// Everything wrong with a set of options, worst first: a food on the avoid
-  /// list is a hard failure, three-dinners-in-one-hat is the softer one.
+  /// list is a hard failure; blowing the fatty liver limits and
+  /// three-dinners-in-one-hat are the softer ones.
   static String _optionsProblem(List<MealOption> opts, List<String> avoids,
       {required bool requireProteinVariety}) {
     final List<String> parts = <String>[
       avoidComplaint(optionsAvoidHits(opts, avoids)),
+      optionsLiverComplaint(opts),
       optionsSimilarity(opts, requireProteinVariety: requireProteinVariety),
     ].where((String s) => s.isNotEmpty).toList();
     return parts.join('; ');
   }
 
-  /// Is [a] a better set than [b]? Fewer avoid violations always wins; ties
-  /// go to the more varied set.
+  /// Is [a] a better set than [b]? Fewer avoid violations always wins; then
+  /// fewer broken liver limits; ties go to the more varied set.
   static bool _isBetter(List<MealOption> a, List<MealOption> b,
       List<String> avoids,
       {required bool requireProteinVariety}) {
@@ -301,6 +304,11 @@ class Chef {
     final int badB = optionsAvoidHits(b, avoids).length;
     if (badA != badB) {
       return badA < badB;
+    }
+    final int liverA = optionsLiverFlags(a).length;
+    final int liverB = optionsLiverFlags(b).length;
+    if (liverA != liverB) {
+      return liverA < liverB;
     }
     return optionsSimilarity(a, requireProteinVariety: requireProteinVariety)
             .length <
@@ -395,6 +403,13 @@ Cooking for $servings ${servings == 1 ? 'person' : 'people'}.
 
 $task
 
+LIVER AND WEIGHT: every one of the 3 options must already sit inside the fatty
+liver rules as written — no more than ~7g saturated fat and ~6g added sugar per
+serving, at least ~8g fiber, whole grains rather than refined, olive oil as the
+fat, nothing deep-fried, no alcohol, no cured or processed meat. Do not offer a
+dish you would then have to apologise for. If a familiar dinner needs lightening
+to get there, lighten it and say so in one clause of "desc".
+
 SIDES ARE OPTIONAL. Add a simple vegetable side (and a starch) only where the
 meal genuinely wants one — a stew, a curry or a loaded bowl is already dinner
 and needs nothing bolted on. When you do add one, keep it plain: roasted,
@@ -418,7 +433,10 @@ prices above for pantry/known items; estimate typical grocery prices for the
 rest.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
+{"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"satFatPerServing":0,"addedSugarPerServing":0,"fiberPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
+"satFatPerServing", "addedSugarPerServing" and "fiberPerServing" are grams per
+serving for everything on the plate — the liver numbers, estimated honestly, not
+rounded down to look good.
 "form" is one entry from the form list above. "cuisine" is a short label
 (e.g. "Thai", "Tex-Mex", "Mediterranean"). "sides" names the vegetable side and
 any starch, or is "" when the dish needs none. "newBuys" is a short comma list
@@ -518,6 +536,13 @@ ${complaint.isEmpty ? '' : '''
 YOUR LAST ATTEMPT BROKE THE AVOID LIST: $complaint. Rewrite the recipe without
 it — swap in something the list allows, or change the dish.'''}
 
+LIVER LIMITS FOR THIS RECIPE (per serving, everything on the plate): at most
+~7g saturated fat, at most ~6g added sugar, at least ~8g fiber. Olive oil is the
+fat and you state its grams. No butter, cream or coconut milk. No alcohol in any
+step. No cured or processed meat. No deep-frying or batter-frying. Whole grains
+rather than refined. This is where a lightened dish usually slips back — the
+option was approved on these numbers, so the method has to hold them.
+
 For every ingredient NOT in that pantry list, append " (new buy)" to its name in
 the ingredients list. Do not imply the user already has anything not listed.
 
@@ -532,8 +557,10 @@ anything without one.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"title":"","description":"","ingredients":[{"item":"","amount":""}],"steps":[{"title":"","content":"","timerSeconds":0}],"notes":"","estCostTotal":0,"estCostPerServing":0,"estGroceryCost":0}
-"notes" is one string containing protein per serving, calories per serving, any
-new buys, and storage/pro tips. Cost fields are numbers in dollars (e.g. 12.75).''';
+"notes" is one string containing protein per serving, calories per serving,
+saturated fat, added sugar and fiber per serving, any new buys, storage/pro
+tips, and one short line on how the dish sits with the fatty liver. Cost fields
+are numbers in dollars (e.g. 12.75).''';
 
     final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
     return Recipe.fromJson(data, baseServings: servings);
@@ -788,11 +815,65 @@ USER PROFILE (hard rules — never violate):
   Never write a step that requires a missing appliance; adapt the method to
   what IS available (or pick a different dish). Where a listed device has a
   capability note, use it — it's there because it changes how to cook.
-- Goals: weight loss, high protein, low calorie, superfoods, more energy.
+- HEALTH (the reason this chef exists): the user is losing weight AND has a
+  FATTY LIVER. Every meal is cooked for both at once. Goals: steady weight
+  loss, high protein, high fiber, low saturated fat, low added sugar, plenty of
+  vegetables, more energy. The FATTY LIVER RULES below are hard rules, not
+  preferences.
 - HOW HE COOKS: weeknight dinners for two, on a budget, after work. Cheap is a
   goal in its own right here, sitting alongside the protein and calorie targets
-  rather than below them. He notices the grocery bill.
+  rather than below them. He notices the grocery bill. Where cost and the liver
+  rules pull against each other, the liver wins — beans and cabbage are cheap,
+  so this is rarely the trade it looks like.
 - Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
+
+FATTY LIVER RULES (hard rules — they outrank taste, cost and the pantry):
+Cooking for this liver is a Mediterranean pattern: vegetables and legumes in
+volume, whole grains instead of refined ones, olive oil as the fat, lean
+protein, and very little sugar or saturated fat. Every meal you write obeys all
+of the following.
+- ADDED SUGAR: about 6 g per serving, maximum, from every source combined.
+  Fructose is the worst thing for this liver. No honey, agave, maple syrup,
+  brown sugar, corn syrup, fruit juice or concentrate, and no sweetened bottled
+  sauce (teriyaki, barbecue, sweet chili, hoisin, glaze) unless you rebuild it
+  with a no-sugar-added base and say so in the ingredient name. Whole fruit is
+  fine and welcome.
+- SATURATED FAT: about 7 g per serving, maximum. Butter, cream, coconut milk,
+  palm oil, and cheese as a main ingredient are out. So are fatty cuts and
+  poultry skin. Use skinless poultry, lean cuts, 93 percent or leaner ground
+  meat, tofu, or legumes; trim visible fat and drain rendered fat. A small
+  amount of hard cheese used as seasoning (10 to 15 g) is fine.
+- FAT SOURCE: extra virgin olive oil is the default cooking and finishing fat.
+  Avocado, nuts and seeds are good. NEVER deep-fry and never batter-and-fry.
+  Air fry, roast, grill, steam, poach, braise, or sauté in a measured amount of
+  oil, and always say the grams of oil.
+- NO ALCOHOL, in the pan or beside the plate. No wine, beer, sherry, mirin or
+  spirits in a sauce, however much of it would cook off. Use stock, vinegar or
+  citrus instead.
+- NO PROCESSED OR CURED MEAT: no bacon, sausage, salami, pepperoni, deli meat,
+  hot dogs, jerky, or anything cured or smoked. This includes the turkey and
+  chicken versions.
+- CARBS ARE WHOLE, NOT REFINED: brown rice, quinoa, farro, barley, bulgur,
+  oats, whole grain pasta, beans, lentils, chickpeas, sweet potato, whole grain
+  tortillas and bread. Keep white rice, white pasta, white bread and buns,
+  pastry and plain breadcrumb coatings out of the body of a dish. Keep the
+  starch portion modest, roughly 60 to 90 g cooked per serving, and let the
+  vegetables and protein carry the plate.
+- FIBER: at least about 8 g per serving. Every meal has real vegetables in it,
+  aiming at half the plate, and legumes wherever they honestly fit.
+- SODIUM: moderate. Season with herbs, spices, citrus, vinegar, garlic and
+  onion rather than reaching for salt, soy sauce or bouillon by the spoon.
+- SKIP THE ULTRA-PROCESSED SHORTCUTS: jarred sauces, packet seasonings and
+  bottled dressings are sugar, oil and salt. Build the sauce or dressing from
+  scratch; it is two lines of the method.
+- LEAN ON WHAT HELPS: olive oil, garlic, onion, leafy greens, cruciferous
+  vegetables, legumes, nuts, oats, berries, green tea, and any oily fish the
+  AVOID list still allows are all genuinely good for this liver.
+- None of this makes dinner unusual. A Mediterranean weeknight meal is an
+  ordinary weeknight meal, so rule 2 (REGULAR FOOD) still stands. If a classic
+  dish cannot be made inside these limits, choose a different classic dish
+  rather than writing a strange one. Say plainly when you have lightened a
+  familiar dish, and how.
 
 THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
 - The pantry list you are given each time is EXHAUSTIVE. Treat ONLY those exact
@@ -843,8 +924,11 @@ MEAL GENERATION RULES:
 8. Use [EXPIRING SOON] ingredients in whichever option they honestly belong in.
    Do not build a dish around one that doesn't want it — a wasted zucchini is
    cheaper than a dinner he won't eat.
-9. High protein, moderate calories — target ~28-40g protein and ~200-500
-   cal/serving for everything on the plate.
+9. NUTRITION TARGET, counting everything on the plate: ~28-40g protein and
+   ~200-500 cal/serving, at least ~8g fiber, no more than ~7g saturated fat,
+   and no more than ~6g added sugar. The protein and calorie numbers are the
+   weight-loss half; the fiber, saturated fat and sugar numbers are the liver
+   half, and they are not negotiable.
 10. COST IS PART OF THE DISH. Every ingredient is money he spends and a thing
     he has to shop for, measure and wash up after — so each one has to earn its
     place. Add it if it genuinely changes the dish; leave it out if it is only
@@ -867,10 +951,12 @@ coming out of your own pocket):
   those ingredients.
 - For any ingredient with no given price, estimate a realistic US grocery price.
 - Cost is not a tiebreaker you apply at the end — it shapes the dish from the
-  start. Ordinary weeknight food is mostly cheap food: eggs, beans, lentils,
-  rice, potatoes, pasta, cabbage, carrots, onions, frozen vegetables, chicken
-  thighs, ground turkey, tofu. Build on those and let the expensive things be
-  accents rather than the centre of the plate.
+  start. Ordinary weeknight food is mostly cheap food, and the cheap version is
+  usually the liver-friendly one too: eggs, beans, lentils, brown rice, oats,
+  barley, potatoes, sweet potatoes, whole grain pasta, cabbage, carrots, onions,
+  frozen vegetables, skinless chicken thighs, lean ground turkey, tofu. Build on
+  those and let the expensive things be accents rather than the centre of the
+  plate.
 - Notice when a meal is drifting expensive — a long shopping list, out-of-season
   produce, a cut or an ingredient bought for one dish — and pull it back before
   you propose it. If one of the three is dearer because it is genuinely worth
@@ -893,8 +979,10 @@ RECIPE OUTPUT FORMAT:
 - All measurements in grams (counts for count items).
 - title -> description -> ingredients (with amounts) -> numbered steps (each
   with a short title) -> notes.
-- Notes: protein per serving, calories per serving, new buys, storage/leftover
-  tips, and pro tips.
+- Notes: protein per serving, calories per serving, saturated fat per serving,
+  added sugar per serving, fiber per serving, new buys, storage/leftover tips,
+  and pro tips. Include one short line on how the dish sits with the fatty
+  liver — the swap you made, or why it was already fine.
 - Steps must be clear and sequential with timing and heat levels. Don't combine
   conflicting equipment in one step (preheat oven and boil on stove are separate
   steps). Include pro tips where they matter (slice against the grain; pan OFF
@@ -931,14 +1019,19 @@ TOVALA SMART OVEN REFERENCE (use ONLY if it's listed in EQUIPMENT):
 - Don't use it as a plain oven when a steam->bake->broil cycle would cook the
   same dish better.
 
-STANDARD BREADING STATION: flour (seasoned) -> beaten egg -> breadcrumb +
-parmesan mix.
+STANDARD BREADING STATION: whole wheat flour or almond flour (seasoned) ->
+beaten egg or egg white -> whole wheat panko + a little parmesan. Air fry it
+with a light spray of olive oil; never deep-fry it and never shallow-fry it in
+a pool of oil.
 
 BEHAVIOR: Behave like a personal chef who cooks for this family every week and
 knows what things cost — not a recipe database showing off. Own mistakes.
 Don't repeat rejected options. Don't ask unnecessary questions. The pantry is
 the source of truth — never assume he ran out of something he didn't mention.
-Honor the wife's known favorites (ketchup-brown sugar glaze, turkey meatballs,
-breaded meats) and build complementary sides. Support multi-person events and
+Honor the wife's known favorites (turkey meatballs, breaded meats, a sweet and
+tangy ketchup glaze) but rebuild them inside the liver rules: no-sugar-added
+ketchup with vinegar and smoked paprika in place of the brown sugar glaze,
+whole wheat panko or almond flour for breading, air fried rather than pan or
+deep fried. Build complementary sides. Support multi-person events and
 breakfast-for-dinner on request, same health rules, unless he says to indulge.
 ''';

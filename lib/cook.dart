@@ -7,6 +7,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'chef.dart';
 import 'chef_models.dart';
+import 'liver.dart';
 import 'models.dart';
 import 'notifications.dart';
 import 'pricebook.dart';
@@ -804,6 +805,33 @@ class _OptionsScreenState extends State<OptionsScreen> {
             Text('${_i(o.caloriesPerServing)} cal',
                 style: mono(size: 12, color: kOlive)),
           ]),
+          // The liver line. Each number is olive inside its limit and amber
+          // over it, so a dish that slipped is visible before it's picked.
+          if (reportsLiverNumbers(o)) ...<Widget>[
+            const SizedBox(height: 5),
+            Row(children: <Widget>[
+              Text('${_i(o.satFatPerServing)}g sat fat',
+                  style: mono(
+                      size: 12,
+                      color: o.satFatPerServing > kMaxSatFatPerServing
+                          ? kWarn
+                          : kOlive)),
+              const SizedBox(width: 14),
+              Text('${_i(o.addedSugarPerServing)}g sugar',
+                  style: mono(
+                      size: 12,
+                      color: o.addedSugarPerServing > kMaxAddedSugarPerServing
+                          ? kWarn
+                          : kOlive)),
+              const SizedBox(width: 14),
+              Text('${_i(o.fiberPerServing)}g fiber',
+                  style: mono(
+                      size: 12,
+                      color: o.fiberPerServing < kMinFiberPerServing
+                          ? kWarn
+                          : kOlive)),
+            ]),
+          ],
           if (o.estCostTotal > 0) ...<Widget>[
             const SizedBox(height: 8),
             Text(

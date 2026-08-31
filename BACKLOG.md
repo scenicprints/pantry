@@ -1,5 +1,27 @@
 # Pantry — Roadmap / Backlog
 
+## Chef health direction — weight loss + fatty liver (landed, unreleased)
+
+The chef now cooks for a fatty liver as well as for weight loss. This is the
+standing contract, not a one-off tweak:
+
+- `lib/chef.dart` — a FATTY LIVER RULES block in the cached system prompt
+  (Mediterranean pattern; caps on added sugar and saturated fat; a fiber floor;
+  olive oil as the fat; whole grains over refined; no alcohol, no cured or
+  processed meat, no deep-frying; moderate sodium). Both call prompts restate
+  the numbers, and the recipe notes now report sat fat / added sugar / fiber.
+- `lib/liver.dart` — the app-side half, same shape as `avoid.dart`. It measures
+  the numbers the chef reports and re-asks once with the specific miss named.
+  Deliberately softer than the avoid list: it never refuses a set outright,
+  because these are the model's own estimates.
+- Limits, all per serving: sat fat <= 7 g, added sugar <= 6 g, fiber >= 8 g,
+  with 1.5 g of slack before a re-ask is spent.
+- The option card shows the three numbers, amber when one is over its limit.
+
+Open decision: the calorie window is still the old `~200-500 cal/serving`. A
+liver-friendly dinner with olive oil, whole grains and legumes lands closer to
+400-550, so the floor may want raising. Left alone until he says.
+
 ## Batch v0.2 (in progress — branch `feature/batch-v0.2`)
 
 Coordinated batch across **pantry** and **bodycomp** repos. Nothing ships until
