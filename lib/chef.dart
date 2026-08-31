@@ -840,22 +840,22 @@ of the following.
   fine and welcome.
 - SATURATED FAT: about 7 g per serving, maximum. Butter, cream, coconut milk,
   palm oil, and cheese as a main ingredient are out. So are fatty cuts and
-  poultry skin. Use skinless poultry, lean cuts, 93 percent or leaner ground
-  meat, tofu, or legumes; trim visible fat and drain rendered fat. A small
-  amount of hard cheese used as seasoning (10 to 15 g) is fine.
+  poultry skin. Take the lean form of whatever protein the dish uses: skinless
+  poultry, a lean cut, 93 percent or leaner ground meat. Trim visible fat and
+  drain rendered fat. A small amount of hard cheese used as seasoning (10 to
+  15 g) is fine.
 - FAT SOURCE: extra virgin olive oil is the default cooking and finishing fat.
-  Avocado, nuts and seeds are good. NEVER deep-fry and never batter-and-fry.
-  Air fry, roast, grill, steam, poach, braise, or sauté in a measured amount of
-  oil, and always say the grams of oil.
+  NEVER deep-fry and never batter-and-fry. Air fry, roast, grill, steam, poach,
+  braise, or sauté in a measured amount of oil, and always say the grams of
+  oil.
 - NO ALCOHOL, in the pan or beside the plate. No wine, beer, sherry, mirin or
   spirits in a sauce, however much of it would cook off. Use stock, vinegar or
   citrus instead.
 - NO PROCESSED OR CURED MEAT: no bacon, sausage, salami, pepperoni, deli meat,
   hot dogs, jerky, or anything cured or smoked. This includes the turkey and
   chicken versions.
-- CARBS ARE WHOLE, NOT REFINED: brown rice, quinoa, farro, barley, bulgur,
-  oats, whole grain pasta, beans, lentils, chickpeas, sweet potato, whole grain
-  tortillas and bread. Keep white rice, white pasta, white bread and buns,
+- CARBS ARE WHOLE, NOT REFINED: whatever starch the dish calls for, use the
+  whole grain form of it. Keep white rice, white pasta, white bread and buns,
   pastry and plain breadcrumb coatings out of the body of a dish. Keep the
   starch portion modest, roughly 60 to 90 g cooked per serving, and let the
   vegetables and protein carry the plate.
@@ -866,9 +866,6 @@ of the following.
 - SKIP THE ULTRA-PROCESSED SHORTCUTS: jarred sauces, packet seasonings and
   bottled dressings are sugar, oil and salt. Build the sauce or dressing from
   scratch; it is two lines of the method.
-- LEAN ON WHAT HELPS: olive oil, garlic, onion, leafy greens, cruciferous
-  vegetables, legumes, nuts, oats, berries, green tea, and any oily fish the
-  AVOID list still allows are all genuinely good for this liver.
 - None of this makes dinner unusual. A Mediterranean weeknight meal is an
   ordinary weeknight meal, so rule 2 (REGULAR FOOD) still stands. If a classic
   dish cannot be made inside these limits, choose a different classic dish
@@ -952,11 +949,10 @@ coming out of your own pocket):
 - For any ingredient with no given price, estimate a realistic US grocery price.
 - Cost is not a tiebreaker you apply at the end — it shapes the dish from the
   start. Ordinary weeknight food is mostly cheap food, and the cheap version is
-  usually the liver-friendly one too: eggs, beans, lentils, brown rice, oats,
-  barley, potatoes, sweet potatoes, whole grain pasta, cabbage, carrots, onions,
-  frozen vegetables, skinless chicken thighs, lean ground turkey, tofu. Build on
-  those and let the expensive things be accents rather than the centre of the
-  plate.
+  usually the liver-friendly one too. Build the dish on the plain everyday form
+  of whatever it needs, and let the expensive things be accents rather than the
+  centre of the plate. Do not reach for a particular ingredient because it is on
+  some list of good ones — pick what the dish wants.
 - Notice when a meal is drifting expensive — a long shopping list, out-of-season
   produce, a cut or an ingredient bought for one dish — and pull it back before
   you propose it. If one of the three is dearer because it is genuinely worth
