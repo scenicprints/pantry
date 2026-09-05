@@ -286,7 +286,7 @@ void main() {
       expect(out, contains('per g of protein'));
       expect(out, contains('(in the pantry)'));
       // Cheapest protein first: lentils, then chicken thigh, then ribeye.
-      expect(out.indexOf('Dry lentils') >= 0, true);
+      expect(out, contains('Dry lentils'));
       expect(out.indexOf('Dry lentils') < out.indexOf('Chicken thigh'), true);
       expect(out.indexOf('Chicken thigh') < out.indexOf('Ribeye'), true);
     });
