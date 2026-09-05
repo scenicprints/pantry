@@ -621,7 +621,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _quick.where((QuickAddItem q) => !q.deleted).toList();
     final List<Widget> pages = <Widget>[
       PantryTab(items: visibleItems, onTapItem: _openItem),
-      CookTab(items: visibleItems, prices: _prices),
+      CookTab(items: visibleItems, prices: _prices, spending: _usage),
       QuickAddTab(
           quick: visibleQuick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(

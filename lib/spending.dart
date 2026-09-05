@@ -140,10 +140,14 @@ class SpendingLog {
   // ── windows ───────────────────────────────────────────────────────────
 
   /// Sunday 00:00 of the week containing [now] (weeks run Sun–Sat).
+  ///
+  /// Counted back through the date constructor rather than by subtracting a
+  /// Duration: on the two DST weekends a 3-day Duration from Wednesday
+  /// midnight lands at 23:00 on Saturday, and that week would then be keyed
+  /// in two different buckets depending on which day it was measured from.
   static DateTime weekStart(DateTime now) {
-    final DateTime midnight = DateTime(now.year, now.month, now.day);
     final int daysSinceSunday = now.weekday % 7; // Mon=1..Sat=6, Sun=7→0
-    return midnight.subtract(Duration(days: daysSinceSunday));
+    return DateTime(now.year, now.month, now.day - daysSinceSunday);
   }
 
   static DateTime monthStart(DateTime now) => DateTime(now.year, now.month, 1);
@@ -309,3 +313,155 @@ double _num(dynamic v) {
 double _round(double v) => (v * 10).round() / 10;
 double _round2(double v) => (v * 100).round() / 100;
 double _round4(double v) => (v * 10000).round() / 10000;
+
+// ═══════════════════════════════════════════════════════════════════════
+// SPEND PROFILE — the ledger boiled down to the handful of numbers worth
+// putting in front of the chef. Not a budget: there is no target here and
+// nothing to pass or fail. It is the answer to "what does he actually spend,
+// and on what", so the chef can cook against the real bill instead of a
+// general sense that groceries cost money.
+//
+// Weeks run Sun–Sat, matching the Spending card. The current (partial) week is
+// never counted in an average — a Monday would otherwise make every week look
+// cheap.
+// ═══════════════════════════════════════════════════════════════════════
+
+class SpendProfile {
+  /// Spend so far in the current, incomplete week.
+  final double weekToDate;
+
+  /// Spend across the last COMPLETE week.
+  final double lastWeek;
+
+  /// Average over every complete week that had any spend.
+  final double avgPerWeek;
+
+  /// Average over the last [recentWeeks] complete weeks with spend.
+  final double recentAvgPerWeek;
+
+  /// Average over the [recentWeeks] complete weeks before those — the
+  /// comparison that makes [trendPct] mean something.
+  final double priorAvgPerWeek;
+
+  /// How many complete weeks have any spend at all.
+  final int activeWeeks;
+
+  /// Biggest cost by item name over the recent window, dearest first.
+  final List<MapEntry<String, double>> drivers;
+
+  /// Total spend across the recent window, so a driver can be read as a share.
+  final double recentTotal;
+
+  const SpendProfile({
+    this.weekToDate = 0,
+    this.lastWeek = 0,
+    this.avgPerWeek = 0,
+    this.recentAvgPerWeek = 0,
+    this.priorAvgPerWeek = 0,
+    this.activeWeeks = 0,
+    this.drivers = const <MapEntry<String, double>>[],
+    this.recentTotal = 0,
+  });
+
+  static const SpendProfile empty = SpendProfile();
+
+  /// Below two active weeks there is no "typical" yet, and saying so beats
+  /// handing the chef one week dressed up as a habit.
+  bool get hasHistory => activeWeeks >= 2;
+
+  /// Percent change from the prior window to the recent one. Positive means
+  /// he is spending more lately. Zero when there is nothing to compare.
+  double get trendPct {
+    if (priorAvgPerWeek <= 0 || recentAvgPerWeek <= 0) {
+      return 0;
+    }
+    return ((recentAvgPerWeek - priorAvgPerWeek) / priorAvgPerWeek) * 100;
+  }
+
+  /// True when the recent window is meaningfully dearer than the one before.
+  bool get isClimbing => trendPct >= 10;
+
+  /// The figure to treat as "a normal week for him" — the recent average when
+  /// there is one, else the all-time one.
+  double get typicalWeek =>
+      recentAvgPerWeek > 0 ? recentAvgPerWeek : avgPerWeek;
+}
+
+extension SpendProfileBuilder on SpendingLog {
+  /// Total spend per week, keyed by that week's Sunday, oldest first.
+  List<MapEntry<DateTime, double>> weeklyTotals() {
+    final Map<int, double> byWeek = <int, double>{};
+    for (final UsageEntry e in entries) {
+      if (e.cost <= 0) {
+        continue;
+      }
+      final DateTime w = SpendingLog.weekStart(
+          DateTime.fromMillisecondsSinceEpoch(e.ts));
+      byWeek[w.millisecondsSinceEpoch] =
+          (byWeek[w.millisecondsSinceEpoch] ?? 0) + e.cost;
+    }
+    final List<int> keys = byWeek.keys.toList()..sort();
+    return keys
+        .map((int k) => MapEntry<DateTime, double>(
+            DateTime.fromMillisecondsSinceEpoch(k), _round2(byWeek[k]!)))
+        .toList();
+  }
+
+  /// Boil the ledger down for the chef. [recentWeeks] sets the width of the
+  /// "lately" window and of the window it is compared against.
+  ///
+  /// The windows are CALENDAR weeks, not "the last N weeks that happened to
+  /// have spend" — otherwise a quiet stretch drags a purchase from two months
+  /// ago into the picture as if it were recent. Averages inside a window still
+  /// skip the weeks with no spend, so one holiday week can't fake a saving.
+  SpendProfile profile(DateTime now,
+      {int recentWeeks = 4, int driverLimit = 6}) {
+    final DateTime thisWeek = SpendingLog.weekStart(now);
+    // Complete weeks only — the current one is still being filled.
+    final List<MapEntry<DateTime, double>> complete = weeklyTotals()
+        .where((MapEntry<DateTime, double> e) => e.key.isBefore(thisWeek))
+        .toList();
+    if (complete.isEmpty) {
+      return SpendProfile(weekToDate: weekTotal(now));
+    }
+
+    final double all = complete.fold<double>(
+            0, (double a, MapEntry<DateTime, double> b) => a + b.value) /
+        complete.length;
+
+    double avgIn(DateTime from, DateTime to) {
+      final List<double> vals = complete
+          .where((MapEntry<DateTime, double> e) =>
+              !e.key.isBefore(from) && e.key.isBefore(to))
+          .map((MapEntry<DateTime, double> e) => e.value)
+          .toList();
+      if (vals.isEmpty) {
+        return 0;
+      }
+      return _round2(
+          vals.fold<double>(0, (double a, double b) => a + b) / vals.length);
+    }
+
+    // Window edges are built through the date constructor, not by subtracting
+    // a Duration: across a daylight-saving boundary a 7-day Duration lands at
+    // 23:00 the day before, which slides a week into the wrong bucket.
+    DateTime weeksBefore(int weeks) =>
+        DateTime(thisWeek.year, thisWeek.month, thisWeek.day - 7 * weeks);
+
+    final DateTime recentStart = weeksBefore(recentWeeks);
+    final DateTime priorStart = weeksBefore(recentWeeks * 2);
+    // Drivers run to the end of the CURRENT week: what he is buying now.
+    final DateTime driverEnd = weeksBefore(-1);
+
+    return SpendProfile(
+      weekToDate: weekTotal(now),
+      lastWeek: spentBetween(weeksBefore(1), thisWeek),
+      avgPerWeek: _round2(all),
+      recentAvgPerWeek: avgIn(recentStart, thisWeek),
+      priorAvgPerWeek: avgIn(priorStart, recentStart),
+      activeWeeks: complete.length,
+      drivers: topItems(recentStart, driverEnd, limit: driverLimit),
+      recentTotal: spentBetween(recentStart, driverEnd),
+    );
+  }
+}

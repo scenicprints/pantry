@@ -22,13 +22,34 @@ class PriceEntry {
   final String unit; // 'g' | 'count'
   final int ts; // when this price was recorded
 
+  /// Protein grams per base unit (per gram, or per unit for count items).
+  /// 0 when unknown — older books have no protein recorded, and plenty of
+  /// foods never had macros scanned.
+  final double proteinPerUnit;
+
   const PriceEntry({
     required this.name,
     this.barcode,
     required this.unitPrice,
     required this.unit,
     required this.ts,
+    this.proteinPerUnit = 0,
   });
+
+  /// Dollars per gram of protein, or 0 when this entry can't say.
+  double get costPerProteinGram =>
+      proteinPerUnit > 0 && unitPrice > 0 ? unitPrice / proteinPerUnit : 0;
+
+  /// A copy carrying [p] as the protein density. Used to keep a known protein
+  /// figure alive when a newer price arrives without one.
+  PriceEntry withProtein(double p) => PriceEntry(
+        name: name,
+        barcode: barcode,
+        unitPrice: unitPrice,
+        unit: unit,
+        ts: ts,
+        proteinPerUnit: p,
+      );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'name': name,
@@ -36,6 +57,7 @@ class PriceEntry {
         'unit_price': _round4(unitPrice),
         'unit': unit,
         'ts': ts,
+        if (proteinPerUnit > 0) 'protein_per_unit': _round4(proteinPerUnit),
       };
 
   factory PriceEntry.fromJson(Map<String, dynamic> j) => PriceEntry(
@@ -44,6 +66,7 @@ class PriceEntry {
         unitPrice: _num(j['unit_price']),
         unit: (j['unit'] as String?) ?? 'g',
         ts: (j['ts'] as num?)?.round() ?? 0,
+        proteinPerUnit: _num(j['protein_per_unit']),
       );
 
   bool get isCount => unit == 'count';
@@ -66,12 +89,18 @@ class PriceBook {
     final String key = item.name.trim().toLowerCase();
     final Map<String, PriceEntry> next =
         Map<String, PriceEntry>.from(byName);
+    // An item with no macros scanned must not erase a protein figure this
+    // name already had.
+    final double protein = item.proteinPerUnit > 0
+        ? item.proteinPerUnit
+        : (next[key]?.proteinPerUnit ?? 0);
     next[key] = PriceEntry(
       name: item.name.trim(),
       barcode: item.barcode,
       unitPrice: item.pricePer,
       unit: item.unit,
       ts: when.millisecondsSinceEpoch,
+      proteinPerUnit: protein,
     );
     return PriceBook(next);
   }
@@ -123,7 +152,11 @@ class PriceBook {
     b.byName.forEach((String k, PriceEntry v) {
       final PriceEntry? cur = out[k];
       if (cur == null || v.ts >= cur.ts) {
-        out[k] = v;
+        // Newer price wins, but an older entry's protein figure survives a
+        // newer one written by a client that never recorded it.
+        out[k] = (cur != null && v.proteinPerUnit <= 0 && cur.proteinPerUnit > 0)
+            ? v.withProtein(cur.proteinPerUnit)
+            : v;
       }
     });
     return PriceBook(out);

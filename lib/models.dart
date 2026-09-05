@@ -144,6 +144,40 @@ class PantryItem {
   /// price ÷ total — price-per-gram (weight) or price-per-unit (count).
   double get pricePer => total > 0 ? price / total : 0;
 
+  /// Protein grams per BASE UNIT — per gram for a weight item, per unit for a
+  /// count item. 0 when the macros or the serving size can't answer, or when
+  /// the serving is measured in something other than grams (an "oz" or "cup"
+  /// serving can't be converted without knowing the food).
+  double get proteinPerUnit {
+    if (macros.proteinG <= 0 || servingSize <= 0) {
+      return 0;
+    }
+    if (!isCount && servingUnit != 'g') {
+      return 0;
+    }
+    final double per = macros.proteinG / servingSize;
+    // A mis-scanned label (40 g of protein in a 5 g serving) would otherwise
+    // read as the cheapest protein in the house and steer whole dinners. No
+    // real food beats 0.9 g of protein per gram — that is pure isolate — and
+    // nothing countable carries 100 g in one unit. Refuse to answer rather
+    // than answer with a number that cannot be true.
+    if (!isCount && per > 0.9) {
+      return 0;
+    }
+    if (isCount && per > 100) {
+      return 0;
+    }
+    return per;
+  }
+
+  /// Dollars per gram of protein — the number that decides whether a protein
+  /// is good value, and the one lever that matters most on this grocery bill.
+  /// 0 when either half is unknown.
+  double get costPerProteinGram {
+    final double p = proteinPerUnit;
+    return p > 0 && pricePer > 0 ? pricePer / p : 0;
+  }
+
   String get unitLabel => isCount ? 'ct' : 'g';
 
   /// Human serving label, e.g. "30 g" or "2 cookie". Empty if unset.

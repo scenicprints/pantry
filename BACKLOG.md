@@ -1,5 +1,49 @@
 # Pantry — Roadmap / Backlog
 
+## Cost-conscious chef v2 — the chef reads the real ledger (landed, unreleased)
+
+The chef used to know what a gram of chicken costs and nothing else. It now
+sees what he actually spends. Conscientious, not budgeted: there is no target
+anywhere in the app, nothing is capped, and no meal is ever rejected on price.
+
+- `lib/spending.dart` — `SpendProfile`, the ledger boiled down to what is worth
+  telling a chef: a normal week, last week, this week so far, whether the bill
+  is climbing, and the named items the money is going to. Windows are CALENDAR
+  weeks (a quiet stretch must not drag a July purchase in as "lately"), the
+  current partial week never dilutes an average, and weeks with no spend are
+  absent rather than counted as zero.
+- `lib/chef.dart` — `formatSpending()` and `formatProteinValue()` build two new
+  prompt blocks. The options call gets both; the recipe call gets protein value
+  only, since that is the call where gram amounts decide the bill. COST
+  AWARENESS in the system prompt was rewritten around them, and it is told
+  explicitly never to mention money to him — the saving shows in what it
+  proposes, not in what it says.
+- **Protein value is the actual lever.** Protein is the dearest thing on the
+  plate, so cost per GRAM OF PROTEIN (not per pound) is what makes proteins
+  comparable. `PantryItem.costPerProteinGram`, and `PriceEntry` now records
+  protein density so the figure survives an item leaving the pantry. On his
+  real data this is stark: Just Bare chicken breast is $0.233 per g of protein
+  against $0.056 for the Co-op fillets — the same food at a quarter the price,
+  and Just Bare is his second biggest cost driver.
+
+### Guards worth keeping (each one came from real data, not theory)
+- **Implausible densities are refused.** A mis-scanned Parmesan label in his
+  pantry claims 40 g of protein in a 5 g serving. Unguarded it ranked as the
+  cheapest protein in the house and would have pushed dinners onto cheese,
+  which the liver rules restrict. Nothing above 0.9 g protein per gram of food
+  is believed.
+- **Only real protein sources are ranked.** Priced per gram of protein, dried
+  oregano looks like the most expensive protein he owns. Foods must carry
+  10 g per 100 g (or 3 g per countable unit) to appear at all.
+- **DST.** `weekStart` counted back with a `Duration`, which lands at 23:00 on
+  the two changeover weekends and split one week across two buckets. Now built
+  through the date constructor. This also fixes the existing Spending card.
+
+Open: the price book has 80 entries and none carry protein yet — the field is
+new. Items currently in the pantry backfill themselves on the next launch (the
+startup `withPantry` seed records it); foods long since used up stay blank
+until bought again.
+
 ## Chef health direction — weight loss + fatty liver (landed, unreleased)
 
 The chef now cooks for a fatty liver as well as for weight loss. This is the

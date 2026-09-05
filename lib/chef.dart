@@ -8,6 +8,7 @@ import 'chef_models.dart';
 import 'liver.dart';
 import 'models.dart';
 import 'pricebook.dart';
+import 'spending.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
 // AI CHEF — talks to the Claude API directly from the phone.
@@ -219,6 +220,7 @@ class Chef {
     required int servings,
     required List<String> recentMeals,
     PriceBook prices = const PriceBook(),
+    SpendProfile spend = SpendProfile.empty,
     String? request,
     List<String> justShown = const <String>[],
     List<String> recentForms = const <String>[],
@@ -235,6 +237,7 @@ class Chef {
         servings: servings,
         recentMeals: recentMeals,
         prices: prices,
+        spend: spend,
         request: req,
         justShown: justShown,
         recentForms: recentForms);
@@ -248,6 +251,7 @@ class Chef {
             servings: servings,
             recentMeals: recentMeals,
             prices: prices,
+            spend: spend,
             request: req,
             justShown: justShown,
             recentForms: recentForms,
@@ -321,6 +325,7 @@ class Chef {
     required int servings,
     required List<String> recentMeals,
     required PriceBook prices,
+    required SpendProfile spend,
     required String request,
     required List<String> justShown,
     required List<String> recentForms,
@@ -329,6 +334,8 @@ class Chef {
     final String req = request;
     final bool hasReq = req.isNotEmpty;
     final String knownPrices = formatKnownPrices(prices, pantry);
+    final String spending = formatSpending(spend);
+    final String proteinValue = formatProteinValue(prices, pantry);
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
     final String formList = kDishForms.join(', ');
 
@@ -372,6 +379,18 @@ ${knownPrices.isEmpty ? '' : '''
 KNOWN PRICES (the user has bought these before — use these exact unit prices if
 a meal needs them as new buys):
 $knownPrices'''}
+${proteinValue.isEmpty ? '' : '''
+
+PROTEIN VALUE — what a gram of protein actually costs him, worked out from the
+prices above. Protein is the target that costs the most to hit, so this is
+where a cheap dinner is won or lost:
+$proteinValue'''}
+${spending.isEmpty ? '' : '''
+
+WHAT HE ACTUALLY SPENDS (his own ledger — money is counted when food is USED,
+not when it is bought). This is not a budget and there is no limit to hit; it
+is what the bill really looks like, so you can cook against it:
+$spending'''}
 
 EQUIPMENT — the ONLY appliances in this kitchen. Never propose a meal that
 needs anything not on this list:
@@ -500,6 +519,7 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
     String complaint = '',
   }) async {
     final String knownPrices = formatKnownPrices(prices, pantry);
+    final String proteinValue = formatProteinValue(prices, pantry);
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
@@ -522,6 +542,13 @@ ${knownPrices.isEmpty ? '' : '''
 
 KNOWN PRICES (bought before — use these exact unit prices for these new buys):
 $knownPrices'''}
+${proteinValue.isEmpty ? '' : '''
+
+PROTEIN VALUE — what a gram of protein costs him from each source. The gram
+amounts you write are where the money in this recipe is actually spent: hit the
+protein target, don't overshoot it, and let the cheaper sources carry the load
+wherever the dish allows it:
+$proteinValue'''}
 
 EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
 with these; never instruct the user to use anything else:
@@ -768,6 +795,116 @@ are numbers in dollars (e.g. 12.75).''';
     return sb.toString().trimRight();
   }
 
+  /// What he actually spends, from his own ledger. Not a budget and not a
+  /// limit — there is nothing here to pass or fail. It is context, so the chef
+  /// cooks against the real bill instead of a vague sense that food costs
+  /// money. Empty until there are enough complete weeks to call anything
+  /// typical.
+  static String formatSpending(SpendProfile p) {
+    if (!p.hasHistory) {
+      return '';
+    }
+    final StringBuffer sb = StringBuffer();
+    sb.writeln('- A normal week for him: ${_money(p.typicalWeek)}');
+    if (p.lastWeek > 0) {
+      sb.writeln('- Last week: ${_money(p.lastWeek)}');
+    }
+    if (p.weekToDate > 0) {
+      sb.writeln('- Already spent this week: ${_money(p.weekToDate)}');
+    }
+    if (p.isClimbing) {
+      sb.writeln('- His grocery spend is CLIMBING: the last few weeks run '
+          '${_money(p.recentAvgPerWeek)} a week against '
+          '${_money(p.priorAvgPerWeek)} before that '
+          '(+${p.trendPct.round()}%). Pulling that back matters to him right '
+          'now.');
+    }
+    if (p.drivers.isNotEmpty && p.recentTotal > 0) {
+      sb.writeln('- Where the money has been going lately '
+          '(${_money(p.recentTotal)} in total):');
+      for (final MapEntry<String, double> d in p.drivers) {
+        final int share = ((d.value / p.recentTotal) * 100).round();
+        sb.writeln('  • ${d.key}: ${_money(d.value)}'
+            '${share >= 5 ? ' — $share% of it' : ''}');
+      }
+    }
+    return sb.toString().trimRight();
+  }
+
+  /// Is this food worth ranking as a PROTEIN at all? Cost per gram of protein
+  /// is a meaningless number for oregano — a spice with a trace of protein and
+  /// a high price per gram lands at the top of the "dearest protein" list and
+  /// says nothing. Only foods carrying real protein for their weight qualify:
+  /// 10 g per 100 g, or 3 g in a countable unit (an egg has about 6).
+  static bool isProteinSource(double proteinPerUnit, bool isCount) =>
+      isCount ? proteinPerUnit >= 3 : proteinPerUnit >= 0.10;
+
+  /// Cost per gram of PROTEIN, worked out from his own prices and his own
+  /// scanned macros. Protein is the target that costs the most to hit, so this
+  /// is the list that decides whether a cheap dinner is possible at all.
+  /// Only foods with both a price and macros can appear.
+  static String formatProteinValue(PriceBook prices, List<PantryItem> pantry) {
+    final Map<String, ({double perProtein, bool inStock})> byName =
+        <String, ({double perProtein, bool inStock})>{};
+    for (final PantryItem it in pantry) {
+      if (it.deleted ||
+          it.costPerProteinGram <= 0 ||
+          !isProteinSource(it.proteinPerUnit, it.isCount)) {
+        continue;
+      }
+      byName[it.name.trim()] =
+          (perProtein: it.costPerProteinGram, inStock: true);
+    }
+    for (final PriceEntry e in prices.byName.values) {
+      final String key = e.name.trim();
+      if (e.costPerProteinGram <= 0 ||
+          byName.containsKey(key) ||
+          !isProteinSource(e.proteinPerUnit, e.isCount)) {
+        continue;
+      }
+      byName[key] = (perProtein: e.costPerProteinGram, inStock: false);
+    }
+    if (byName.length < 3) {
+      return '';
+    }
+    final List<MapEntry<String, ({double perProtein, bool inStock})>> sorted =
+        byName.entries.toList()
+          ..sort((MapEntry<String, ({double perProtein, bool inStock})> a,
+                  MapEntry<String, ({double perProtein, bool inStock})> b) =>
+              a.value.perProtein.compareTo(b.value.perProtein));
+
+    String line(MapEntry<String, ({double perProtein, bool inStock})> e) =>
+        '  • ${e.key}: ${_perProtein(e.value.perProtein)}'
+        '${e.value.inStock ? ' (in the pantry)' : ''}';
+
+    final int cheapCount = sorted.length < 8 ? sorted.length : 8;
+    final StringBuffer sb = StringBuffer();
+    sb.writeln('CHEAPEST protein he has prices for:');
+    for (final MapEntry<String, ({double perProtein, bool inStock})> e
+        in sorted.take(cheapCount)) {
+      sb.writeln(line(e));
+    }
+    // The dear end only when there is one left to show — with a short list,
+    // repeating the same foods under a second heading says nothing.
+    final List<MapEntry<String, ({double perProtein, bool inStock})>> rest =
+        sorted.skip(cheapCount).toList();
+    if (rest.isNotEmpty) {
+      final int dearCount = rest.length < 4 ? rest.length : 4;
+      sb.writeln('DEAREST protein he has prices for:');
+      for (final MapEntry<String, ({double perProtein, bool inStock})> e
+          in rest.skip(rest.length - dearCount)) {
+        sb.writeln(line(e));
+      }
+    }
+    return sb.toString().trimRight();
+  }
+
+  static String _money(double v) => '\$${v.toStringAsFixed(2)}';
+
+  /// "$0.04 per g of protein" — the unit that makes proteins comparable.
+  static String _perProtein(double v) =>
+      '\$${v.toStringAsFixed(v < 0.1 ? 3 : 2)} per g of protein';
+
   /// "$0.012/g" or "$0.25 each"; empty when there's no price.
   static String _priceLabel(double unitPrice, bool isCount) {
     if (unitPrice <= 0) {
@@ -820,11 +957,13 @@ USER PROFILE (hard rules — never violate):
   loss, high protein, high fiber, low saturated fat, low added sugar, plenty of
   vegetables, more energy. The FATTY LIVER RULES below are hard rules, not
   preferences.
-- HOW HE COOKS: weeknight dinners for two, on a budget, after work. Cheap is a
-  goal in its own right here, sitting alongside the protein and calorie targets
-  rather than below them. He notices the grocery bill. Where cost and the liver
-  rules pull against each other, the liver wins — beans and cabbage are cheap,
-  so this is rarely the trade it looks like.
+- HOW HE COOKS: weeknight dinners for two, on a tight budget, after work. Cheap
+  is a goal in its own right here, sitting alongside the protein and calorie
+  targets rather than below them. Money is tighter than it was and he is
+  actively trying to bring the grocery bill down, so a dinner that costs less
+  is worth real something to him. Where cost and the liver rules pull against
+  each other, the liver wins — beans, lentils and cabbage are cheap, so this is
+  rarely the trade it looks like.
 - Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
 
 FATTY LIVER RULES (hard rules — they outrank taste, cost and the pantry):
@@ -940,13 +1079,41 @@ MEAL GENERATION RULES:
 12. Respect the allergy and the AVOID list even if the pantry contains a
     forbidden item — but never invent extra restrictions beyond them.
 
-COST AWARENESS (he shops on a budget — treat the grocery bill as if it were
-coming out of your own pocket):
+COST AWARENESS (money is genuinely tight for him right now — the grocery bill
+matters more than it used to, and you treat it as if it were coming out of your
+own pocket):
 - You are given unit prices: pantry items show a price per gram (e.g. "\$0.012/g")
   or per unit (e.g. "\$0.25 each"), and a KNOWN PRICES list gives prices for
   things the user has bought before. USE THOSE EXACT PRICES when the meal needs
   those ingredients.
 - For any ingredient with no given price, estimate a realistic US grocery price.
+- YOU ARE GIVEN HIS REAL SPENDING, not a guess: what a normal week costs him,
+  what the last one cost, whether it is climbing, and the items the money has
+  actually been going to. Read those numbers and cook against them.
+  * The named cost drivers are the specific foods draining his budget. Anything
+    at the top of that list has to earn its place all over again — propose it
+    only when the dish genuinely needs it, in a smaller amount, or not at all.
+    Do not build two of the three options on the same expensive driver.
+  * When his spend is marked as CLIMBING, that is the week to lean cheaper
+    across all three options, not to offer two dear ones and one saver.
+  * These figures are context, not a budget. There is no number you must come
+    in under and nothing is rejected on price. What is asked is that the money
+    shows in the choices you make.
+- PROTEIN IS WHERE THE MONEY GOES. His targets need 28-40 g of protein a
+  serving, and protein is the dearest thing on the plate — so the cost of a
+  dinner is mostly decided by which protein you reach for and how much of it
+  you use.
+  * You are given cost PER GRAM OF PROTEIN for the foods he has prices for.
+    That, not the price per pound, is what makes proteins comparable: a cheap
+    cut that is half water can cost more per gram of protein than a dear one.
+  * Favour the cheap end of that list. Eggs, tinned fish, chicken thigh, lean
+    ground turkey, cottage cheese, lentils, dried beans and tofu are the usual
+    winners, and every one of them suits the liver rules.
+  * Let legumes carry part of the protein where the dish honestly allows it —
+    beans in the chilli, lentils in the sauce. That is the single biggest
+    saving available, and it raises the fiber at the same time.
+  * Hit the protein target; do not overshoot it. 200 g of meat a serving where
+    150 g makes the number is money spent for nothing.
 - Cost is not a tiebreaker you apply at the end — it shapes the dish from the
   start. Ordinary weeknight food is mostly cheap food, and the cheap version is
   usually the liver-friendly one too. Build the dish on the plain everyday form
@@ -957,8 +1124,13 @@ coming out of your own pocket):
   produce, a cut or an ingredient bought for one dish — and pull it back before
   you propose it. If one of the three is dearer because it is genuinely worth
   it, fine; not all three.
+- NEVER LECTURE HIM ABOUT MONEY. He knows what things cost; that is why you
+  have his ledger. Do not mention his budget, his spending, savings made, or
+  how thrifty a dish is, in any title, description or note. The saving shows up
+  in what you propose, never in what you say about it.
 - This never overrides rule 2, rule 6, the allergy, the AVOID list or the
-  nutrition targets. Buy the one or two ordinary things a good dinner needs.
+  nutrition targets. A dinner he won't eat is not a saving. Buy the one or two
+  ordinary things a good dinner needs.
 - Always report costs in US dollars, rounded to cents. estGroceryCost is only
   the NEW BUYS — the actual money the user spends at the store for this meal.
 - These are estimates; do not claim exact prices.

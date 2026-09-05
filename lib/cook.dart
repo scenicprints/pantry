@@ -11,6 +11,7 @@ import 'liver.dart';
 import 'models.dart';
 import 'notifications.dart';
 import 'pricebook.dart';
+import 'spending.dart';
 import 'storage.dart';
 import 'theme.dart';
 
@@ -26,8 +27,16 @@ String money(double v) => '\$${v.toStringAsFixed(2)}';
 class CookTab extends StatefulWidget {
   final List<PantryItem> items;
   final PriceBook prices;
+
+  /// The consumption ledger. The chef reads a summary of it so meals are
+  /// costed against what he actually spends, not against a guess.
+  final SpendingLog spending;
+
   const CookTab(
-      {super.key, required this.items, this.prices = const PriceBook()});
+      {super.key,
+      required this.items,
+      this.prices = const PriceBook(),
+      this.spending = const SpendingLog()});
 
   @override
   State<CookTab> createState() => _CookTabState();
@@ -35,6 +44,11 @@ class CookTab extends StatefulWidget {
 
 class _CookTabState extends State<CookTab> {
   int _servings = 2;
+
+  /// Boiled down fresh for each ask, so a meal cooked this afternoon is
+  /// already part of the picture by dinner.
+  SpendProfile get _spend => widget.spending.profile(DateTime.now());
+
   MealHistory _history = const MealHistory(kSeedMealHistory);
   List<PlannedMeal> _planned = <PlannedMeal>[];
   RecipeBox _box = const RecipeBox();
@@ -180,6 +194,7 @@ class _CookTabState extends State<CookTab> {
         recentMeals: _history.recent(),
         recentForms: _history.frequentShapes(),
         prices: widget.prices,
+        spend: _spend,
       ),
     );
     if (options == null || !mounted) {
@@ -203,6 +218,7 @@ class _CookTabState extends State<CookTab> {
         recentMeals: _history.recent(),
         recentForms: _history.frequentShapes(),
         prices: widget.prices,
+        spend: _spend,
         request: request,
       ),
     );
@@ -226,6 +242,7 @@ class _CookTabState extends State<CookTab> {
           recentMeals: _history.recent(),
           recentForms: _history.frequentShapes(),
           prices: widget.prices,
+          spend: _spend,
           request: request,
           justShown: shown.map((MealOption o) => o.title).toList(),
         ),
