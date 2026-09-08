@@ -1351,16 +1351,20 @@ class _AddItemPageState extends State<AddItemPage> {
   double _d(TextEditingController c) => double.tryParse(c.text.trim()) ?? 0;
   bool get _isCount => _unit == kUnitCount;
 
-  /// Total = serving size × servings per container. If servings is blank,
-  /// one serving is assumed. With no serving size, the total is just whatever
-  /// is on hand.
+  /// Total = serving size × servings per container, or what's on hand —
+  /// whichever is larger. If servings is blank, one serving is assumed.
+  ///
+  /// The on-hand floor matters: a package routinely holds more than
+  /// serving × servings says (an odd number of servings, a label rounded
+  /// down, a pack re-weighed at the counter). Total used to be the label's
+  /// figure alone, and Available was clamped to it on save — so a 100 g
+  /// serving × 4.8 ground beef silently refused to go above 480 g.
   double get _computedTotal {
     final double s = _d(_serving);
     final double n = _d(_servings);
-    if (s > 0) {
-      return n > 0 ? s * n : s;
-    }
-    return _d(_available);
+    final double avail = _d(_available);
+    final double fromServings = s > 0 ? (n > 0 ? s * n : s) : 0;
+    return fromServings > avail ? fromServings : avail;
   }
 
   /// The resolved serving unit string (preset or the typed custom value).
@@ -1541,9 +1545,12 @@ class _AddItemPageState extends State<AddItemPage> {
     final double total = _computedTotal;
     final double s = _d(_serving);
     final double n = _d(_servings);
-    final String detail = (s > 0 && n > 0)
-        ? '${_fmt(s)} × ${_fmt(n)}'
-        : (s > 0 ? '1 serving' : 'from Available');
+    // Say which number won, so a total larger than the label's figure reads
+    // as deliberate rather than as a bug.
+    final double fromServings = s > 0 ? (n > 0 ? s * n : s) : 0;
+    final String detail = fromServings <= 0 || total > fromServings
+        ? 'from Available'
+        : (n > 0 ? '${_fmt(s)} × ${_fmt(n)}' : '1 serving');
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),

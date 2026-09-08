@@ -2,17 +2,21 @@ import 'dart:convert';
 
 // ═══════════════════════════════════════════════════════════════════════
 // CHEF MODELS — the shapes the Claude API returns for the two-call flow:
-//   Call 1 → a list of MealOption (3, each a different protein)
+//   Call 1 → a list of MealOption (kOptionCount, all wildly different)
 //   Call 2 → a full Recipe (ingredients + numbered steps w/ timers + notes)
 // Plus local meal history so options stay fresh.
 // ═══════════════════════════════════════════════════════════════════════
 
-/// One of the 3 options the user picks from.
-/// The dish forms the chef must choose from. Three options must each use a
+/// How many dinner options the chef proposes each time.
+const int kOptionCount = 5;
+
+/// One of the [kOptionCount] options the user picks from.
+/// The dish forms the chef must choose from. Every option must use a
 /// different one — this is what "genuinely different" means, mechanically.
 // Everyday forms only. "braise", "stuffed or rolled" and "flatbread or pizza"
-// came out — with three-different-forms enforced every night, the list itself
-// decided how strange dinner got.
+// came out — with different-forms enforced every night, the list itself
+// decided how strange dinner got. It has to stay long enough that
+// kOptionCount ordinary dinners can each take a different one.
 const List<String> kDishForms = <String>[
   'sheet-pan',
   'stir-fry',
@@ -106,61 +110,57 @@ String proteinFamily(String protein) {
   return p;
 }
 
-/// Why a set of options fails the "three different dinners" bar — '' when
-/// it passes. Checked app-side because the model reads "genuinely different"
-/// as "different sauce on the same meatball".
+/// Dish forms that arrive at the table as the same dinner, however the label
+/// differs. Three soups is what the user actually complained about, and the
+/// form list alone never caught it: "soup or stew", "curry" and a brothy
+/// "bowl" are three different labels and one identical plate. Anything not
+/// named here is its own family.
+const Map<String, String> _kFormFamilies = <String, String>{
+  'soup or stew': 'a bowl of something simmered',
+  'curry': 'a bowl of something simmered',
+  'burger or patty': 'formed ground meat',
+  'meatballs': 'formed ground meat',
+  'stir fry': 'a hot pan of chopped things',
+  'skillet': 'a hot pan of chopped things',
+  'sheet pan': 'a tray in the oven',
+  'casserole or bake': 'a tray in the oven',
+};
+
+/// The family [form] belongs to — itself, when it shares with nothing.
+String formFamily(String form) {
+  final String f = _norm(form);
+  return _kFormFamilies[f] ?? f;
+}
+
+/// Why a set of options fails the "wildly different dinners" bar — '' when
+/// the set is fine.
 ///
-/// The bar used to be all three axes different, every time. Nothing ordinary
-/// satisfies that, so the chef went hunting for strange dishes to fill the
-/// third slot. Now a pair only fails when it matches on TWO of the three
-/// axes — two chicken dinners are fine if they are actually different dishes
-/// — plus the whole set may not share any single axis.
-String optionsSimilarity(List<MealOption> opts, {bool requireProteinVariety = true}) {
+/// The axes are not equal, and that is deliberate:
+///  • FORM is strict, judged by family: no two options may be the same KIND
+///    of dinner. A stew and a curry are one dinner twice.
+///  • CUISINE is strict: no two share one.
+///  • PROTEIN may repeat — the user's call ("it is okay to share a protein").
+///    Two chicken dinners that are genuinely different dishes are fine; all
+///    of them on one protein is still one dinner in five hats.
+String optionsSimilarity(List<MealOption> opts,
+    {bool requireProteinVariety = true}) {
   if (opts.length < 2) {
     return '';
   }
-  final List<String> forms = opts.map((MealOption o) => _norm(o.form)).toList();
   final List<String> proteins =
       opts.map((MealOption o) => proteinFamily(o.protein)).toList();
-  final List<String> cuisines =
-      opts.map((MealOption o) => _norm(o.cuisine)).toList();
-  final List<String> problems = <String>[];
-
-  // Two options alike on two axes are one dinner in a different hat.
-  for (int i = 0; i < opts.length; i++) {
-    for (int j = i + 1; j < opts.length; j++) {
-      final List<String> shared = <String>[
-        if (forms[i].isNotEmpty && forms[i] == forms[j])
-          'dish form (${forms[i]})',
-        if (cuisines[i].isNotEmpty && cuisines[i] == cuisines[j])
-          'cuisine (${cuisines[i]})',
-        if (requireProteinVariety &&
-            proteins[i].isNotEmpty &&
-            proteins[i] == proteins[j])
-          'protein (${proteins[i]})',
-      ];
-      if (shared.length >= 2) {
-        problems.add('"${opts[i].title}" and "${opts[j].title}" share '
-            '${shared.join(' and ')}');
-      }
-    }
-  }
-
-  // And a set that agrees on any one axis is still one dinner, however the
-  // rest varies — three meatball plates, three Thai dishes, three chickens.
-  for (final String p in <String>[
-    _allShare(forms, 'dish form'),
-    _allShare(cuisines, 'cuisine'),
+  final List<String> problems = <String>[
+    _repeats(opts.map((MealOption o) => formFamily(o.form)).toList(), opts,
+        'kind of dish'),
+    _repeats(opts.map((MealOption o) => _norm(o.cuisine)).toList(), opts,
+        'cuisine'),
     if (requireProteinVariety) _allShare(proteins, 'protein'),
-  ]) {
-    if (p.isNotEmpty) {
-      problems.add(p);
-    }
-  }
+  ].where((String s) => s.isNotEmpty).toList();
   return problems.join('; ');
 }
 
-/// '' unless every option carries the same value on this axis.
+/// '' unless EVERY option carries the same value on this axis. The weak bar,
+/// used where repeats are allowed but a clean sweep is still one dinner.
 String _allShare(List<String> values, String label) {
   if (values.length < 2 || values.any((String v) => v.isEmpty)) {
     return '';
@@ -168,6 +168,26 @@ String _allShare(List<String> values, String label) {
   return values.toSet().length == 1
       ? 'all of them share one $label (${values.first})'
       : '';
+}
+
+/// '' unless two or more options carry the same value on this axis — otherwise
+/// it names them, so the retry knows exactly which dinner to swap out.
+String _repeats(List<String> values, List<MealOption> opts, String label) {
+  final Map<String, List<String>> byValue = <String, List<String>>{};
+  for (int i = 0; i < values.length && i < opts.length; i++) {
+    if (values[i].isEmpty) {
+      continue; // an unlabelled axis can't be judged
+    }
+    byValue.putIfAbsent(values[i], () => <String>[]).add(opts[i].title);
+  }
+  final List<String> dups = <String>[];
+  for (final MapEntry<String, List<String>> e in byValue.entries) {
+    if (e.value.length > 1) {
+      dups.add('${e.value.map((String t) => '"$t"').join(' and ')} '
+          'share one $label (${e.key})');
+    }
+  }
+  return dups.join('; ');
 }
 
 /// One ingredient row. [amount] is a display string ("300 g", "2", "1 tbsp");

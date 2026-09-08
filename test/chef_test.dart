@@ -93,7 +93,7 @@ void main() {
         opt('Turkey Meatballs Marinara', 'ground turkey', 'meatballs', 'Italian'),
         opt('Greek Lamb Meatballs', 'ground lamb', 'meatballs', 'Greek'),
       ]);
-      expect(why, contains('dish form'));
+      expect(why, contains('kind of dish'));
     });
 
     test('genuinely different dinners pass', () {
@@ -106,9 +106,7 @@ void main() {
           '');
     });
 
-    test('two chicken dinners are fine when they are different dishes', () {
-      // The old bar was all three axes different, every time. Nothing
-      // ordinary satisfies that, so the chef went looking for strange food.
+    test('two chicken dinners are fine — sharing a protein is allowed', () {
       expect(
           optionsSimilarity(<MealOption>[
             opt('A', 'chicken breast', 'sheet-pan', 'Greek'),
@@ -118,24 +116,65 @@ void main() {
           '');
     });
 
-    test('same protein AND same form is still one dinner twice', () {
+    test('every option on one protein is still one dinner in five hats', () {
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('A', 'chicken breast', 'sheet-pan', 'Greek'),
+            opt('B', 'chicken thighs', 'stir-fry', 'Thai'),
+            opt('C', 'chicken wings', 'grill', 'Korean'),
+          ]),
+          contains('all of them share one protein'));
+    });
+
+    test('a stew and a curry are one kind of dinner, whatever the label', () {
+      // "I would get like three soups" — the form list alone never caught it,
+      // because soup / curry / brothy bowl are three labels and one plate.
+      final String why = optionsSimilarity(<MealOption>[
+        opt('Chicken Noodle Soup', 'chicken', 'soup or stew', 'American'),
+        opt('Chickpea Curry', 'chickpeas', 'curry', 'Indian'),
+        opt('Beef Tacos', 'ground beef', 'tacos or wraps', 'Mexican'),
+      ]);
+      expect(why, contains('kind of dish'));
+      expect(why, contains('simmered'));
+    });
+
+    test('other adjacent forms collapse too', () {
+      for (final List<String> pair in <List<String>>[
+        <String>['burger or patty', 'meatballs'],
+        <String>['stir-fry', 'skillet'],
+        <String>['sheet-pan', 'casserole or bake'],
+      ]) {
+        expect(
+            optionsSimilarity(<MealOption>[
+              opt('A', 'beef', pair[0], 'American'),
+              opt('B', 'pork', pair[1], 'Italian'),
+              opt('C', 'lentils', 'soup or stew', 'Greek'),
+            ]),
+            contains('kind of dish'),
+            reason: '${pair[0]} vs ${pair[1]} should collapse');
+      }
+    });
+
+    test('same form is one dinner twice, protein aside', () {
       final String why = optionsSimilarity(<MealOption>[
         opt('A', 'chicken breast', 'sheet-pan', 'Greek'),
         opt('B', 'chicken thighs', 'sheet-pan', 'Thai'),
         opt('C', 'tofu', 'bowl', 'Korean'),
       ]);
-      expect(why, contains('dish form'));
-      expect(why, contains('protein'));
+      expect(why, contains('kind of dish'));
     });
 
     test('a specific request may repeat the protein but not the form', () {
+      // A craving pins the protein; form and cuisine still have to spread.
       final List<MealOption> opts = <MealOption>[
         opt('A', 'chicken', 'tacos or wraps', 'Mexican'),
         opt('B', 'chicken', 'soup or stew', 'Thai'),
         opt('C', 'chicken', 'sheet-pan', 'Greek'),
       ];
       expect(optionsSimilarity(opts, requireProteinVariety: false), '');
-      expect(optionsSimilarity(opts), contains('protein'));
+      // Even without a request, an all-chicken sweep trips the weak bar.
+      expect(optionsSimilarity(opts),
+          contains('all of them share one protein'));
     });
 
     test('form/cuisine casing and hyphens do not fool it', () {
@@ -144,30 +183,54 @@ void main() {
         opt('B', 'pork', 'sheet-pan', 'Thai'),
         opt('C', 'tofu', 'bowl', 'Korean'),
       ]);
-      expect(why, contains('dish form'));
+      expect(why, contains('kind of dish'));
       expect(why, contains('cuisine'));
     });
 
-    test('one shared axis out of three is allowed now', () {
-      // Two sheet-pans is fine if they are different food; two Thai dishes
-      // is fine if they are different dishes.
+    test('a shared form is enough to fail the set', () {
       expect(
           optionsSimilarity(<MealOption>[
             opt('A', 'beef', 'sheet-pan', 'Mexican'),
             opt('B', 'chicken', 'sheet-pan', 'Greek'),
             opt('C', 'tofu', 'bowl', 'Korean'),
           ]),
+          contains('kind of dish'));
+    });
+
+    test('five wildly different dinners pass', () {
+      expect(
+          optionsSimilarity(<MealOption>[
+            opt('Roast Chicken', 'chicken', 'roast', 'American'),
+            opt('Beef Tacos', 'ground beef', 'tacos or wraps', 'Mexican'),
+            opt('Sausage Pasta', 'pork sausage', 'pasta or noodles', 'Italian'),
+            opt('Shrimp Stir-Fry', 'shrimp', 'stir-fry', 'Chinese'),
+            opt('Lentil Soup', 'lentils', 'soup or stew', 'Greek'),
+          ]),
           '');
     });
 
-    test('all three on one axis still fails however the rest varies', () {
+    test('a set of five names the one repeat, not the whole set', () {
+      final String why = optionsSimilarity(<MealOption>[
+        opt('Roast Chicken', 'chicken', 'roast', 'American'),
+        opt('Beef Tacos', 'ground beef', 'tacos or wraps', 'Mexican'),
+        opt('Sausage Pasta', 'pork sausage', 'pasta or noodles', 'Italian'),
+        opt('Shrimp Stir-Fry', 'shrimp', 'stir-fry', 'Chinese'),
+        opt('Lentil Stew', 'lentils', 'soup or stew', 'Mexican'),
+      ]);
+      expect(why, contains('cuisine'));
+      expect(why, contains('"Beef Tacos" and "Lentil Stew"'));
+      expect(why, isNot(contains('kind of dish')));
+      expect(why, isNot(contains('protein')));
+    });
+
+    test('a whole set on one axis fails, however the rest varies', () {
       expect(
           optionsSimilarity(<MealOption>[
             opt('A', 'beef', 'sheet-pan', 'Mexican'),
             opt('B', 'chicken', 'sheet-pan', 'Greek'),
             opt('C', 'tofu', 'sheet-pan', 'Korean'),
           ]),
-          contains('dish form'));
+          contains('kind of dish'));
       expect(
           optionsSimilarity(<MealOption>[
             opt('A', 'beef', 'skillet', 'Thai'),
