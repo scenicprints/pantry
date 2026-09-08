@@ -1,11 +1,11 @@
-name: pantry
-description: "Pantry inventory & cost tracker — scans groceries and syncs a JSON pantry to GitHub for the AI chef to read."
+﻿name: pantry
+description: "Pantry inventory & cost tracker â€” scans groceries and syncs a JSON pantry to GitHub for the AI chef to read."
 publish_to: 'none'
 
 # Version is the single source of truth for the app's version.
 # publish.ps1 bumps this; the in-app updater compares it to the latest
 # GitHub Release. (Mirrors the BodyComp pipeline.)
-version: 0.15.0+29
+version: 0.16.0+30
 
 environment:
   sdk: ^3.9.0
@@ -40,7 +40,7 @@ dev_dependencies:
   flutter_launcher_icons: ^0.14.1  # generates the launcher icon
 
 # App launcher icon. Source art (green mason jar on the dark app bg) is
-# produced by scratchpad/gen_icon.py → assets/icon/*.
+# produced by scratchpad/gen_icon.py â†’ assets/icon/*.
 flutter_launcher_icons:
   android: true
   ios: false
