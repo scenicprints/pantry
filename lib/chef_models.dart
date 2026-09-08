@@ -110,31 +110,64 @@ String proteinFamily(String protein) {
   return p;
 }
 
+/// Dish forms that arrive at the table as the same dinner, however the label
+/// differs. Three soups is what the user actually complained about, and the
+/// form list alone never caught it: "soup or stew", "curry" and a brothy
+/// "bowl" are three different labels and one identical plate. Anything not
+/// named here is its own family.
+const Map<String, String> _kFormFamilies = <String, String>{
+  'soup or stew': 'a bowl of something simmered',
+  'curry': 'a bowl of something simmered',
+  'burger or patty': 'formed ground meat',
+  'meatballs': 'formed ground meat',
+  'stir fry': 'a hot pan of chopped things',
+  'skillet': 'a hot pan of chopped things',
+  'sheet pan': 'a tray in the oven',
+  'casserole or bake': 'a tray in the oven',
+};
+
+/// The family [form] belongs to — itself, when it shares with nothing.
+String formFamily(String form) {
+  final String f = _norm(form);
+  return _kFormFamilies[f] ?? f;
+}
+
 /// Why a set of options fails the "wildly different dinners" bar — '' when
 /// the set is fine.
 ///
-/// The bar has moved twice. It was once all axes different, which with only
-/// three slots left nothing ordinary for the third; it was relaxed to "no two
-/// alike on TWO axes". With five slots there is room again, and the user asked
-/// for wildly different — so every option now has to stand alone on dish FORM,
-/// on CUISINE, and (unless a specific request pins the protein) on PROTEIN.
-/// Ordinary food still outranks this: the chef is told to reach for a plainer
-/// dinner, never a stranger one, to satisfy it.
+/// The axes are not equal, and that is deliberate:
+///  • FORM is strict, judged by family: no two options may be the same KIND
+///    of dinner. A stew and a curry are one dinner twice.
+///  • CUISINE is strict: no two share one.
+///  • PROTEIN may repeat — the user's call ("it is okay to share a protein").
+///    Two chicken dinners that are genuinely different dishes are fine; all
+///    of them on one protein is still one dinner in five hats.
 String optionsSimilarity(List<MealOption> opts,
     {bool requireProteinVariety = true}) {
   if (opts.length < 2) {
     return '';
   }
+  final List<String> proteins =
+      opts.map((MealOption o) => proteinFamily(o.protein)).toList();
   final List<String> problems = <String>[
-    _repeats(opts.map((MealOption o) => _norm(o.form)).toList(), opts,
-        'dish form'),
+    _repeats(opts.map((MealOption o) => formFamily(o.form)).toList(), opts,
+        'kind of dish'),
     _repeats(opts.map((MealOption o) => _norm(o.cuisine)).toList(), opts,
         'cuisine'),
-    if (requireProteinVariety)
-      _repeats(opts.map((MealOption o) => proteinFamily(o.protein)).toList(),
-          opts, 'protein'),
+    if (requireProteinVariety) _allShare(proteins, 'protein'),
   ].where((String s) => s.isNotEmpty).toList();
   return problems.join('; ');
+}
+
+/// '' unless EVERY option carries the same value on this axis. The weak bar,
+/// used where repeats are allowed but a clean sweep is still one dinner.
+String _allShare(List<String> values, String label) {
+  if (values.length < 2 || values.any((String v) => v.isEmpty)) {
+    return '';
+  }
+  return values.toSet().length == 1
+      ? 'all of them share one $label (${values.first})'
+      : '';
 }
 
 /// '' unless two or more options carry the same value on this axis — otherwise

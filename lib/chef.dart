@@ -332,8 +332,8 @@ The user has a SPECIFIC REQUEST for this meal:
 Propose exactly $kOptionCount options that satisfy this request as closely as
 possible while still obeying EVERY hard rule (allergy, AVOID list). They must be
 $kOptionCount ordinary dinners a home cook would recognise, and wildly different
-ones: no two may share a dish FORM, and no two may share a CUISINE. They do NOT
-need different proteins if the request points to one. Use pantry items where they
+ones: no two may be the same KIND of dish (a stew and a curry are one kind), and
+no two may share a CUISINE. Repeating a protein is fine. Use pantry items where they
 fit; new buys are expected and fine to fulfil the request. Only prioritize an
 [EXPIRING SOON] item if it suits the request.'''
         : '''
@@ -341,14 +341,18 @@ Propose exactly $kOptionCount dinner options. Every one of them must be an
 ordinary dinner a home cook would recognise and could name in a few plain words
 — the kind of thing that turns up on a weeknight table.
 
-They also have to be $kOptionCount WILDLY different dinners. Each one stands
-alone on all three axes, with no repeats anywhere in the set:
-  • dish FORM — $kOptionCount different ones, each from: $formList.
+They also have to be $kOptionCount WILDLY different dinners:
+  • dish FORM — $kOptionCount different ones, each from: $formList. Judge
+    this by what ARRIVES AT THE TABLE, not by the label. A stew, a curry and
+    a brothy bowl are three different words for one dinner; so are a burger
+    and a meatball, a stir-fry and a skillet, a sheet-pan and a bake. No two
+    options may be the same KIND of dinner — and never more than one of them
+    eaten with a spoon out of a bowl.
   • CUISINE / flavor family — $kOptionCount different ones, ranging widely
     across the world rather than handing back five neighbours.
-  • primary PROTEIN — $kOptionCount different ones (any protein not on the
-    AVOID list). Eggs, beans and lentils count.
-Two options sharing a form, a cuisine or a protein is a failed set.
+  • primary PROTEIN — repeats are FINE here. Two chicken dinners that are
+    genuinely different dishes are welcome; just don't put every option on the
+    same protein.
 
 Ordinary still outranks different. There are more than enough plain weeknight
 dinners to fill $kOptionCount slots — a roast, a soup, tacos, a pasta and a
@@ -410,12 +414,16 @@ The pantry above is the COMPLETE list of what the user has. Everything else —
 including any protein, oil, spice, or staple — is a NEW BUY. Do not claim the
 user already has an ingredient that is not listed above; put it in newBuys.
 
-COST: these are weeknight dinners on a budget. Keep each ingredient list short
-and made of everyday groceries — an ingredient earns its place by changing the
-dish, not by being authentic. Build on cheap staples and keep the expensive
-things to accents. Buy the one or two ordinary things a dish needs (rule 6),
-but notice when an option is drifting expensive and pull it back before you
-propose it.
+EVERY OPTION HAS TO BE WORTH LOOKING FORWARD TO. He is picking dinner off this
+screen after a day at work — if none of the $kOptionCount makes him hungry, the
+answer is wrong however sensible it is. Give each one something that makes it
+good: a crust, a char, a glaze, a sauce, a crunch against something soft. Plain
+ingredients cooked properly, not plain ingredients left plain.
+
+COST: keep each ingredient list to what the dish needs and don't waste money on
+things nobody will taste — but do NOT pick the cheaper dinner over the better
+one, and don't lean on lentils, beans and cabbage just because they are cheap.
+Buy the one or two ordinary things a dish needs (rule 6).
 For each option estimate its total cost for $servings ${servings == 1 ? 'serving' : 'servings'}
 (estCostTotal) and per serving (estCostPerServing), in US dollars. Use the unit
 prices above for pantry/known items; estimate typical grocery prices for the
@@ -423,6 +431,9 @@ rest.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
+"desc" is one plain sentence that makes him want it — say what it looks and
+tastes like on the plate (what's crisp, what's saucy, what it's spooned over),
+not a list of ingredients and never a sales pitch.
 "form" is one entry from the form list above. "cuisine" is a short label
 (e.g. "Thai", "Tex-Mex", "Mediterranean"). "sides" names the vegetable side and
 any starch, or is "" when the dish needs none. "newBuys" is a short comma list
@@ -497,11 +508,14 @@ like eggs as counts). Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
 Keep it as simple as the dish honestly allows: as few steps and as few
 ingredients as the dish actually needs, and no technique a home cook on a
-weeknight wouldn't use. Do not pad the method to look thorough.
+weeknight wouldn't use. Do not pad the method to look thorough. Simple is not
+the same as bland — keep every step that makes the food good (the sear, the
+browning, the sauce, the seasoning, the acid at the end) and cut only padding.
 ${option.sides.isEmpty ? '' : '''
 The side is part of this recipe: "${option.sides}". Include its ingredients and
 its steps, sequenced so everything lands together (start what takes longest
-first; say when to start the side). Keep the side plain — it is a side.'''}
+first; say when to start the side). Keep the side simple — it is a side —
+but not bare: season it and give it some colour.'''}
 
 PANTRY (the complete list of what the user has on hand; prices are per gram or
 per unit):
@@ -794,10 +808,12 @@ USER PROFILE (hard rules — never violate):
   Never write a step that requires a missing appliance; adapt the method to
   what IS available (or pick a different dish). Where a listed device has a
   capability note, use it — it's there because it changes how to cook.
-- Goals: weight loss, high protein, low calorie, superfoods, more energy.
-- HOW HE COOKS: weeknight dinners for two, on a budget, after work. Cheap is a
-  goal in its own right here, sitting alongside the protein and calorie targets
-  rather than below them. He notices the grocery bill.
+- Goals: weight loss, high protein, sensible calories, superfoods, more energy.
+  Lean, not meagre — he is eating well, not dieting his way through dinner.
+- HOW HE COOKS: weeknight dinners for two, after work. He wants real food he
+  looks forward to at the end of the day — not a diet plate, and not a budget
+  exercise. He notices the grocery bill, so don't be wasteful; but a dinner
+  worth eating is worth paying the ordinary price for.
 - Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
 
 THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
@@ -820,24 +836,40 @@ THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
 
 MEAL GENERATION RULES:
 1. Present exactly $kOptionCount options; the user picks one.
-2. REGULAR FOOD. This is the rule that outranks the rest. Every option is an
-   ordinary dinner a home cook would recognise and could name in a few plain
-   words — the sort of thing that turns up on a weeknight table. Cook a dish
-   as its own cuisine; never invent a fusion, never mash two cuisines onto one
-   plate, never build a dish around a novelty ingredient. If the title needs a
-   clause to explain itself, it is the wrong dish. Simple beats clever, and a
-   familiar dinner beats an interesting one every single time.
-3. WILDLY DIFFERENT DINNERS, but never at the cost of rule 2. Judge it on dish
-   FORM, cuisine, and protein: no two options may match on ANY of the three —
-   every option a different form, a different cuisine, a different protein. Two
-   chicken dinners is a failed set; so is two sheet-pans. There is room to do
-   that with ordinary food, so if the only way to make a slot "different" is to
-   make it strange, keep it ordinary and take the distance from another axis.
+2. REGULAR FOOD HE ACTUALLY WANTS TO EAT. This is the rule that outranks the
+   rest, and it has two halves that only work together.
+   ORDINARY: every option is a dinner a home cook would recognise and could
+   name in a few plain words — the sort of thing that turns up on a weeknight
+   table. Cook a dish as its own cuisine; never invent a fusion, never mash two
+   cuisines onto one plate, never build a dish around a novelty ingredient. If
+   the title needs a clause to explain itself, it is the wrong dish. Simple
+   beats clever, and a familiar dinner beats an interesting one every time.
+   APPETIZING: ordinary is not the same as drab, and the plainest version of a
+   dish is not automatically the right one. Every option has to be something he
+   is glad to see after work. That means the things that make ordinary food
+   good: something browned, seared, crisped, glazed, roasted hard or melted; a
+   sauce, dressing or pan juice that ties the plate together; a texture against
+   a soft one; seasoning and acid that actually show up. A dinner nobody looks
+   forward to fails this rule exactly as badly as a fusion dish does. If you
+   would not be pleased to be served it yourself, do not propose it.
+3. WILDLY DIFFERENT DINNERS, but never at the cost of rule 2. The axes are
+   not equal:
+   • FORM is strict, and judged by what lands on the plate rather than by the
+     word used. Stew, curry, chowder, chili and a brothy bowl are ONE kind of
+     dinner — at most one of them per set, and this is the failure he has
+     actually complained about ("I would get like three soups"). Same for
+     burger/meatball, stir-fry/skillet, sheet-pan/casserole.
+   • CUISINE is strict: no two options share one.
+   • PROTEIN may repeat. Two chicken dinners that are genuinely different
+     dishes are fine; all of them on one protein is not.
+   If the only way to make a slot "different" is to make it strange, keep it
+   ordinary and take the distance from form or cuisine instead.
 4. Never repeat a meal from the recent history you are given, and steer away
    from forms/dishes the history shows he's been eating a lot of.
-5. Sides are optional. Add a simple vegetable side, and a starch, only when the
-   meal actually wants one — a stew or a curry is already dinner. Keep any side
-   plain, and build it from pantry vegetables when there are any.
+5. Sides are optional. Add a vegetable side, and a starch, only when the meal
+   actually wants one — a stew or a curry is already dinner. Keep any side
+   simple, but simple is not bare: roast it hard, char it, dress it, season it.
+   Build it from pantry vegetables when there are any.
 6. THE PANTRY IS A CONVENIENCE, NOT A CONSTRAINT. Use what fits the dish and
    buy the rest. One or two ordinary new buys always beats bending a dish
    around what happens to be in the cupboard. Never assemble a meal out of
@@ -849,40 +881,38 @@ MEAL GENERATION RULES:
 8. Use [EXPIRING SOON] ingredients in whichever option they honestly belong in.
    Do not build a dish around one that doesn't want it — a wasted zucchini is
    cheaper than a dinner he won't eat.
-9. High protein, moderate calories — target ~28-40g protein and ~200-500
-   cal/serving for everything on the plate.
-10. COST IS PART OF THE DISH. Every ingredient is money he spends and a thing
-    he has to shop for, measure and wash up after — so each one has to earn its
-    place. Add it if it genuinely changes the dish; leave it out if it is only
-    there to be authentic or thorough. Let a main and its side share an
-    aromatic, an oil, a sauce rather than each pulling its own. Lean on salt,
-    heat and technique before another jar. Prefer long-lasting new buys
-    (spices, oils, sauces) over perishables and one-use specialty items that
-    will rot in the fridge; label new buys clearly. None of this outranks rule
-    2 — a strange dinner is not a saving, and neither is a bland one. Getting
-    a lot out of a few ordinary ingredients is the skill being asked for.
+9. High protein, real portions — target ~28-40g protein and ~400-700
+   cal/serving for everything on the plate. That is a proper dinner for a
+   grown adult, not a diet plate: do not shave a portion down, drop the
+   starch or skip the fat you cook in to land on a smaller number.
+10. DON'T BE WASTEFUL — but cost does not choose the dinner. Rule 2 chooses
+    the dinner; cost only keeps it from being needlessly expensive. Avoid what
+    wastes money without making the food better: a one-use specialty item that
+    will rot in the fridge, out-of-season produce bought for a garnish, a long
+    tail of ingredients nobody will taste. Prefer long-lasting new buys
+    (spices, oils, sauces) over perishables, let a main and its side share an
+    aromatic, and label new buys clearly. Then buy the two or three ordinary
+    things a good dinner actually needs without flinching — a dinner he enjoys
+    is worth far more than the couple of dollars a duller one would save.
 11. Don't ask whether he can go to the store — he can. Just include new buys.
 12. Respect the allergy and the AVOID list even if the pantry contains a
     forbidden item — but never invent extra restrictions beyond them.
 
-COST AWARENESS (he shops on a budget — treat the grocery bill as if it were
-coming out of your own pocket):
+COST AWARENESS (report it honestly; do not let it pick the menu):
 - You are given unit prices: pantry items show a price per gram (e.g. "\$0.012/g")
   or per unit (e.g. "\$0.25 each"), and a KNOWN PRICES list gives prices for
   things the user has bought before. USE THOSE EXACT PRICES when the meal needs
   those ingredients.
 - For any ingredient with no given price, estimate a realistic US grocery price.
-- Cost is not a tiebreaker you apply at the end — it shapes the dish from the
-  start. Ordinary weeknight food is mostly cheap food: eggs, beans, lentils,
-  rice, potatoes, pasta, cabbage, carrots, onions, frozen vegetables, chicken
-  thighs, ground turkey, tofu. Build on those and let the expensive things be
-  accents rather than the centre of the plate.
-- Notice when a meal is drifting expensive — a long shopping list, out-of-season
-  produce, a cut or an ingredient bought for one dish — and pull it back before
-  you propose it. If one of them is dearer because it is genuinely worth
-  it, fine; not the whole set.
-- This never overrides rule 2, rule 6, the allergy, the AVOID list or the
-  nutrition targets. Buy the one or two ordinary things a good dinner needs.
+- Cost is REPORTED, not optimised. Do not trade a better dinner for a cheaper
+  one, do not strip an ingredient that earns its place on the plate, and never
+  build the menu around lentils, beans, cabbage and rice because they are
+  cheap — that is how five nights in a row turn into soup.
+- Notice only genuine waste: a long shopping list nobody will taste, an
+  ingredient bought for one dish and never used again. A meal that costs a few
+  dollars more because it is worth eating is the right answer.
+- Cost never overrides rule 2, rule 6, the allergy, the AVOID list or the
+  nutrition targets.
 - Always report costs in US dollars, rounded to cents. estGroceryCost is only
   the NEW BUYS — the actual money the user spends at the store for this meal.
 - These are estimates; do not claim exact prices.
