@@ -12,7 +12,7 @@ import 'pricebook.dart';
 // AI CHEF — talks to the Claude API directly from the phone.
 //
 // Two-call flow (kept separate on purpose — see the master spec):
-//   Call 1  generateOptions() → 3 protein-varied meal options
+//   Call 1  generateOptions() → kOptionCount wildly different options
 //   Call 2  generateRecipe()  → the full grams-based recipe
 //
 // Model default: claude-haiku-4-5 (cheap, plenty for this). Optional
@@ -207,11 +207,11 @@ class ChefKeys {
 class Chef {
   static const String _endpoint = 'https://api.anthropic.com/v1/messages';
 
-  // ── Call 1: three options ─────────────────────────────────────────────
+  // ── Call 1: the options ───────────────────────────────────────────────
   // [request], when given, is a free-text craving/description (e.g. from the
-  // wife) — the 3 options are then tailored to it. [justShown] are the titles
-  // of options the user just rejected with "three different ideas", so a
-  // regenerate can't hand back the same three. [recentForms] is derived from
+  // wife) — the options are then tailored to it. [justShown] are the titles
+  // of options the user just rejected with "five different ideas", so a
+  // regenerate can't hand back the same set. [recentForms] is derived from
   // recentMeals so the chef is steered away from what it keeps making.
   static Future<List<MealOption>> generateOptions({
     required List<PantryItem> pantry,
@@ -225,7 +225,7 @@ class Chef {
     final String req = request?.trim() ?? '';
     final bool hasReq = req.isNotEmpty;
     final List<String> avoids = await ChefKeys.getAvoids();
-    // Ask, check, and if the three came back as one dinner in three hats — or
+    // Ask, check, and if they came back as one dinner in five hats — or
     // with a food he doesn't eat — ask again with the specific complaint
     // attached. An avoid violation is a hard failure, so it gets a second
     // retry; variety alone gets one.
@@ -282,7 +282,7 @@ class Chef {
   }
 
   /// Everything wrong with a set of options, worst first: a food on the avoid
-  /// list is a hard failure, three-dinners-in-one-hat is the softer one.
+  /// list is a hard failure, one-dinner-in-five-hats is the softer one.
   static String _optionsProblem(List<MealOption> opts, List<String> avoids,
       {required bool requireProteinVariety}) {
     final List<String> parts = <String>[
@@ -329,30 +329,34 @@ class Chef {
 The user has a SPECIFIC REQUEST for this meal:
 "$req"
 
-Propose exactly 3 options that satisfy this request as closely as possible while
-still obeying EVERY hard rule (allergy, AVOID list). They must be three ordinary
-dinners a home cook would recognise, and three different ones: no two alike on
-both dish FORM and cuisine, and not all three on either. They do NOT need
-different proteins if the request points to one. Use pantry items where they
+Propose exactly $kOptionCount options that satisfy this request as closely as
+possible while still obeying EVERY hard rule (allergy, AVOID list). They must be
+$kOptionCount ordinary dinners a home cook would recognise, and wildly different
+ones: no two may share a dish FORM, and no two may share a CUISINE. They do NOT
+need different proteins if the request points to one. Use pantry items where they
 fit; new buys are expected and fine to fulfil the request. Only prioritize an
 [EXPIRING SOON] item if it suits the request.'''
         : '''
-Propose exactly 3 dinner options. Every one of them must be an ordinary dinner
-a home cook would recognise and could name in a few plain words — the kind of
-thing that turns up on a weeknight table.
+Propose exactly $kOptionCount dinner options. Every one of them must be an
+ordinary dinner a home cook would recognise and could name in a few plain words
+— the kind of thing that turns up on a weeknight table.
 
-They also have to be three different dinners, judged on three axes:
-  • dish FORM — pick each from: $formList.
-  • CUISINE / flavor family.
-  • primary PROTEIN — any protein not on the AVOID list.
-The bar is: no two options may match on TWO of those axes, and all three may
-not share any single one. Two chicken dinners are fine when they are genuinely
-different dishes. Three chicken dinners, or three sheet-pans, are not.
+They also have to be $kOptionCount WILDLY different dinners. Each one stands
+alone on all three axes, with no repeats anywhere in the set:
+  • dish FORM — $kOptionCount different ones, each from: $formList.
+  • CUISINE / flavor family — $kOptionCount different ones, ranging widely
+    across the world rather than handing back five neighbours.
+  • primary PROTEIN — $kOptionCount different ones (any protein not on the
+    AVOID list). Eggs, beans and lentils count.
+Two options sharing a form, a cuisine or a protein is a failed set.
 
-Being different is the lower priority of the two. Never reach for an unusual
-dish, a fusion, or an exotic ingredient to make the three look varied — a
-plain, familiar third option beats a clever one every time. Use any
-[EXPIRING SOON] ingredient in whichever option it honestly belongs in.''';
+Ordinary still outranks different. There are more than enough plain weeknight
+dinners to fill $kOptionCount slots — a roast, a soup, tacos, a pasta and a
+stir-fry are already five familiar dinners with nothing in common — so never
+reach for a fusion, a novelty ingredient or a restaurant dish to fill the last
+one. If a slot will only go "different" by going strange, keep it plain and take
+the distance from a different axis. Use any [EXPIRING SOON] ingredient in
+whichever option it honestly belongs in.''';
 
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
@@ -382,7 +386,7 @@ The user has been eating a lot of these lately — steer AWAY from them:
 ${recentForms.map((String f) => '- $f').join('\n')}'''}
 ${justShown.isEmpty ? '' : '''
 
-The user just REJECTED these three and asked for different ideas — none of your
+The user just REJECTED these and asked for different ideas — none of your
 options may resemble them (not the same dish, form, or spin):
 ${justShown.map((String t) => '- $t').join('\n')}'''}
 ${complaint.isEmpty ? '' : '''
@@ -425,7 +429,9 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
 (or "No new buys" if all from pantry). Cost fields are numbers in dollars
 (e.g. 8.50).''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 1800);
+    // Roomier than the old three-option budget: five options of JSON, each
+    // with sides and cost fields, ran close to the 1800 ceiling.
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 3200);
     final List<dynamic> opts = (data['options'] as List<dynamic>?) ?? <dynamic>[];
     final List<MealOption> out = opts
         .whereType<Map<String, dynamic>>()
@@ -813,7 +819,7 @@ THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH (most important rule):
   pantry.
 
 MEAL GENERATION RULES:
-1. Present exactly 3 options; the user picks one.
+1. Present exactly $kOptionCount options; the user picks one.
 2. REGULAR FOOD. This is the rule that outranks the rest. Every option is an
    ordinary dinner a home cook would recognise and could name in a few plain
    words — the sort of thing that turns up on a weeknight table. Cook a dish
@@ -821,12 +827,12 @@ MEAL GENERATION RULES:
    plate, never build a dish around a novelty ingredient. If the title needs a
    clause to explain itself, it is the wrong dish. Simple beats clever, and a
    familiar dinner beats an interesting one every single time.
-3. THREE DIFFERENT DINNERS, but never at the cost of rule 2. Judge it on dish
-   FORM, cuisine, and protein: no two options alike on two of those three, and
-   not all three sharing any one of them — no three meatball dishes, no three
-   sheet-pans. Two chicken dinners that are actually different dishes are fine.
-   If the only way to make a third option "different" is to make it strange,
-   make it ordinary instead.
+3. WILDLY DIFFERENT DINNERS, but never at the cost of rule 2. Judge it on dish
+   FORM, cuisine, and protein: no two options may match on ANY of the three —
+   every option a different form, a different cuisine, a different protein. Two
+   chicken dinners is a failed set; so is two sheet-pans. There is room to do
+   that with ordinary food, so if the only way to make a slot "different" is to
+   make it strange, keep it ordinary and take the distance from another axis.
 4. Never repeat a meal from the recent history you are given, and steer away
    from forms/dishes the history shows he's been eating a lot of.
 5. Sides are optional. Add a simple vegetable side, and a starch, only when the
@@ -873,8 +879,8 @@ coming out of your own pocket):
   accents rather than the centre of the plate.
 - Notice when a meal is drifting expensive — a long shopping list, out-of-season
   produce, a cut or an ingredient bought for one dish — and pull it back before
-  you propose it. If one of the three is dearer because it is genuinely worth
-  it, fine; not all three.
+  you propose it. If one of them is dearer because it is genuinely worth
+  it, fine; not the whole set.
 - This never overrides rule 2, rule 6, the allergy, the AVOID list or the
   nutrition targets. Buy the one or two ordinary things a good dinner needs.
 - Always report costs in US dollars, rounded to cents. estGroceryCost is only

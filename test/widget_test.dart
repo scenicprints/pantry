@@ -1,5 +1,6 @@
 // Smoke test + unit tests for the pantry data model.
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -36,6 +37,28 @@ void main() {
     await tester.pumpWidget(const PantryApp());
     await tester.pump();
     expect(find.text('Pantry'), findsWidgets);
+  });
+
+  // The 480 g ground beef: its label reads 100 g × 4.8 servings, so Total came
+  // out 480 and Available was silently clamped down to it on save — the pack
+  // could never be recorded as the 900 g actually bought. What's on hand is
+  // now the floor for Total.
+  testWidgets('Available above serving × servings raises Total, is not clamped',
+      (WidgetTester tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final PantryItem saved = await _addItem(tester,
+        name: 'Ground beef', serving: '100', servings: '4.8', available: '900');
+    expect(saved.total, 900);
+    expect(saved.remaining, 900);
+  });
+
+  testWidgets('Available below the label total leaves Total alone',
+      (WidgetTester tester) async {
+    GoogleFonts.config.allowRuntimeFetching = false;
+    final PantryItem saved = await _addItem(tester,
+        name: 'Ground beef', serving: '100', servings: '4.8', available: '200');
+    expect(saved.total, 480);
+    expect(saved.remaining, 200);
   });
 
   test('price_per (weight) is price ÷ total grams', () {
@@ -212,4 +235,50 @@ void main() {
     expect(it.servingUnit, 'g');
     expect(it.macros.proteinG, 7);
   });
+}
+
+/// Fill in the Add-item screen and tap "Add to pantry", returning the item it
+/// pops. Drives the real widget, not the model — the clamp this guards lived
+/// in the screen's save path. The surface is made tall on purpose: the form is
+/// a ListView, so on a phone-sized test viewport the AMOUNT & COST fields are
+/// never built and can't be typed into.
+Future<PantryItem> _addItem(
+  WidgetTester tester, {
+  required String name,
+  required String serving,
+  required String servings,
+  required String available,
+}) async {
+  tester.view.physicalSize = const Size(1000, 4000);
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+
+  PantryItem? result;
+  await tester.pumpWidget(MaterialApp(
+    home: Builder(
+      builder: (BuildContext context) => TextButton(
+        onPressed: () async => result = await Navigator.of(context)
+            .push<PantryItem>(MaterialPageRoute<PantryItem>(
+                builder: (_) => const AddItemPage())),
+        child: const Text('open'),
+      ),
+    ),
+  ));
+  await tester.tap(find.text('open'));
+  await tester.pumpAndSettle();
+
+  Future<void> type(String label, String value) async {
+    await tester.enterText(find.widgetWithText(TextField, label).first, value);
+    await tester.pump();
+  }
+
+  await type('Name', name);
+  await type('Serving size', serving);
+  await type('Servings per container', servings);
+  await type('Available now (g)', available);
+
+  await tester.tap(find.text('Add to pantry'));
+  await tester.pumpAndSettle();
+  return result!;
 }
