@@ -13,17 +13,22 @@ import 'github_sync.dart';
 // type it all again on the phone.
 //
 // It travels through `cooked.json` in the shared pantry-data repo because the
-// measuring happens on the iPad and the logging happens on the phone. Both
-// apps already hold a write token for that repo.
+// cooking happens on the iPad and the logging happens on the phone. Both apps
+// already hold a write token for that repo.
 //
-// Division of labour, so nothing is counted twice:
-//   Pantry   subtracts the raw grams from pantry.json and books the spend.
-//   BodyComp logs the food, and must NOT subtract a meal that arrives here.
+// THE LINE BETWEEN THE TWO APPS:
+//   Pantry   records what went IN the pan, subtracts it from the shelf, and
+//            books the spend.
+//   BodyComp works out what went on the PLATE and logs it, exactly as it
+//            always has, and must not subtract a meal that arrives here.
 //
-// PLATE WEIGHT: the cook weighs what goes on his own plate, never what the
-// pan produced. BodyComp turns that into a share using its own cooking-yield
-// table (estimated, by his call — he does not want to be asked). That is why
-// a group carries the plate weight and the raw lines, and no batch total.
+// Pantry has no business asking about portions. It does not know what you
+// served yourself, and BodyComp already does that job properly.
+//
+// Every ingredient goes into ONE meal. Each line does carry the pan it was
+// cooked in, though, because what was NOT cooked together is the thing to be
+// wary of: a side that never got stirred in comes off the tray as its own
+// mass, and BodyComp needs to know that to portion it sensibly.
 // ═══════════════════════════════════════════════════════════════════════
 
 const String kCookedPath = 'cooked.json';
@@ -36,17 +41,23 @@ class CookedLine {
   final String? barcode;
   final double rawG;
 
+  /// The pan this was cooked in, as the chef grouped them. Empty when it was
+  /// never cooked with anything — a garnish, or something added at the table.
+  final String group;
+
   const CookedLine({
     required this.name,
     required this.rawG,
     this.pantryId = '',
     this.barcode,
+    this.group = '',
   });
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'pantry_id': pantryId,
         'name': name,
         if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
+        if (group.isNotEmpty) 'group': group,
         'raw_g': double.parse(rawG.toStringAsFixed(1)),
       };
 
@@ -54,36 +65,8 @@ class CookedLine {
         pantryId: (j['pantry_id'] as String?) ?? '',
         name: (j['name'] as String?) ?? '',
         barcode: j['barcode'] as String?,
+        group: (j['group'] as String?) ?? '',
         rawG: (j['raw_g'] as num?)?.toDouble() ?? 0,
-      );
-}
-
-/// One pan. [plateG] is what the cook put on his own plate from it, 0 when he
-/// didn't take any (a component that all went into leftovers).
-class CookedGroup {
-  final String name;
-  final double plateG;
-  final List<CookedLine> lines;
-
-  const CookedGroup({
-    required this.name,
-    required this.plateG,
-    required this.lines,
-  });
-
-  Map<String, dynamic> toJson() => <String, dynamic>{
-        'name': name,
-        'plate_g': double.parse(plateG.toStringAsFixed(1)),
-        'lines': lines.map((CookedLine l) => l.toJson()).toList(),
-      };
-
-  factory CookedGroup.fromJson(Map<String, dynamic> j) => CookedGroup(
-        name: (j['name'] as String?) ?? '',
-        plateG: (j['plate_g'] as num?)?.toDouble() ?? 0,
-        lines: ((j['lines'] as List<dynamic>?) ?? <dynamic>[])
-            .whereType<Map<String, dynamic>>()
-            .map(CookedLine.fromJson)
-            .toList(),
       );
 }
 
@@ -93,14 +76,14 @@ class CookedMeal {
   final String recipe;
   final int servings;
   final int cookedAtMs;
-  final List<CookedGroup> groups;
+  final List<CookedLine> lines;
 
   const CookedMeal({
     required this.id,
     required this.recipe,
     required this.servings,
     required this.cookedAtMs,
-    required this.groups,
+    required this.lines,
   });
 
   /// True once Pantry has taken these amounts off the shelf. BodyComp reads
@@ -113,7 +96,7 @@ class CookedMeal {
         'servings': servings,
         'cooked_at_ms': cookedAtMs,
         'pantry_settled': pantrySettled,
-        'groups': groups.map((CookedGroup g) => g.toJson()).toList(),
+        'lines': lines.map((CookedLine l) => l.toJson()).toList(),
       };
 
   factory CookedMeal.fromJson(Map<String, dynamic> j) => CookedMeal(
@@ -121,9 +104,9 @@ class CookedMeal {
         recipe: (j['recipe'] as String?) ?? '',
         servings: (j['servings'] as num?)?.round() ?? 0,
         cookedAtMs: (j['cooked_at_ms'] as num?)?.round() ?? 0,
-        groups: ((j['groups'] as List<dynamic>?) ?? <dynamic>[])
+        lines: ((j['lines'] as List<dynamic>?) ?? <dynamic>[])
             .whereType<Map<String, dynamic>>()
-            .map(CookedGroup.fromJson)
+            .map(CookedLine.fromJson)
             .toList(),
       );
 }

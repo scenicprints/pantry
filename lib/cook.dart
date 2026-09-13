@@ -7,6 +7,7 @@ import 'chef.dart';
 import 'chef_models.dart';
 import 'chef_sync.dart';
 import 'cook_timers.dart';
+import 'cook_session.dart';
 import 'cooked_handoff.dart';
 import 'liver.dart';
 import 'models.dart';
@@ -1490,6 +1491,31 @@ class _RecipeScreenState extends State<RecipeScreen> {
   late int _servings = widget.initialServings ?? widget.recipe.baseServings;
   late bool _saved = widget.alreadySaved;
 
+  /// The weights for this cook. Built on demand and kept for as long as the
+  /// recipe is open, so measuring and cooking read and write the same numbers
+  /// and nothing is typed twice.
+  CookSession? _session;
+
+  CookSession get _cook {
+    final CookSession? s = _session;
+    if (s != null && s.servings == _servings) {
+      return s;
+    }
+    s?.dispose();
+    return _session = CookSession(
+      recipe: widget.recipe,
+      servings: _servings,
+      factor: _factor,
+      pantry: widget.pantry,
+    );
+  }
+
+  @override
+  void dispose() {
+    _session?.dispose();
+    super.dispose();
+  }
+
   bool _revising = false;
 
   void _save() {
@@ -1597,6 +1623,9 @@ class _RecipeScreenState extends State<RecipeScreen> {
                     factor: _factor,
                     pantry: widget.pantry,
                     servings: _servings,
+                    session: _cook,
+                    onUse: widget.onUse,
+                    onSent: widget.onCooked,
                   ),
                 ),
               ),
@@ -1619,11 +1648,8 @@ class _RecipeScreenState extends State<RecipeScreen> {
                 MaterialPageRoute<void>(
                   builder: (_) =>
                       PrepScreen(
-                    recipe: r,
-                    servings: _servings,
-                    pantry: widget.pantry,
-                    onUse: widget.onUse,
-                    onSent: widget.onCooked,
+                    session: _cook,
+                    onStartCooking: _startCooking,
                   ),
                 ),
               ),
@@ -1787,6 +1813,21 @@ class _RecipeScreenState extends State<RecipeScreen> {
         ),
       ]),
     );
+  }
+
+  /// Straight from measuring into cooking, carrying the same weights.
+  void _startCooking() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => CookingModeScreen(
+        recipe: widget.recipe,
+        factor: _factor,
+        pantry: widget.pantry,
+        servings: _servings,
+        session: _cook,
+        onUse: widget.onUse,
+        onSent: widget.onCooked,
+      ),
+    ));
   }
 
   /// Write down what was off, whenever you notice it. The chef reads these
@@ -1987,12 +2028,22 @@ class CookingModeScreen extends StatefulWidget {
   final double factor;
   final List<PantryItem> pantry;
   final int servings;
+
+  /// The weights, shared with the measuring screen. Editable from here too,
+  /// because things change while you cook.
+  final CookSession? session;
+  final void Function(PantryItem item, double grams)? onUse;
+  final void Function(String title)? onSent;
+
   const CookingModeScreen({
     super.key,
     required this.recipe,
     required this.factor,
     this.pantry = const <PantryItem>[],
     this.servings = 0,
+    this.session,
+    this.onUse,
+    this.onSent,
   });
 
   @override
@@ -2004,6 +2055,7 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
   int _page = 0;
   late bool _twoPane = LocalCache.prefBool(kPrefTwoPane, fallback: true);
   late bool _counter = LocalCache.prefBool(kPrefCounter);
+  bool _sending = false;
 
   @override
   void initState() {
@@ -2066,9 +2118,9 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
         title: Text('Cooking', style: serif(size: 18)),
         actions: <Widget>[
           IconButton(
-            tooltip: 'Ingredients',
-            onPressed: _showIngredients,
-            icon: const Icon(Icons.receipt_long_rounded),
+            tooltip: 'Weights',
+            onPressed: _showWeights,
+            icon: const Icon(Icons.scale_rounded),
           ),
           if (wide)
             IconButton(
@@ -2117,10 +2169,8 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
               if (_page < _steps.length - 1)
                 _navBtn('Next', () => _go(_page + 1), primary: true)
               else
-                _navBtn('Done', () {
-                  CookTimers.instance.clearAll();
-                  Navigator.pop(context);
-                }, primary: true),
+                _navBtn(_sending ? 'Sending…' : 'Done', _sending ? null : _done,
+                    primary: true),
             ]),
           ),
         ),
@@ -2255,67 +2305,109 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
 
   // ── ingredients + running out ─────────────────────────────────────────
 
-  void _showIngredients() {
+  /// The weights, mid-cook. Pulled up from any step, because sometimes you
+  /// weigh while it cooks — something takes longer to bake than the recipe
+  /// said and the number changes.
+  void _showWeights() {
+    final CookSession? s = widget.session;
+    if (s == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Open this recipe from the start to record weights.')));
+      return;
+    }
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: kCard,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (BuildContext ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(ctx).height * 0.8),
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-            children: <Widget>[
-              Row(children: <Widget>[
-                Text('INGREDIENTS', style: labelCaps(color: kAccent)),
-                const Spacer(),
-                Text('tap one if you are out',
-                    style: mono(size: 11, color: kFaint)),
-              ]),
-              const SizedBox(height: 12),
-              for (final RecipeIngredient ing in widget.recipe.ingredients)
-                InkWell(
-                  borderRadius: BorderRadius.circular(8),
-                  onTap: () {
-                    Navigator.pop(ctx);
-                    showOutOfSheet(
-                      context: context,
-                      recipe: widget.recipe,
-                      ingredient: ing,
-                      pantry: widget.pantry,
-                      servings: widget.servings > 0
-                          ? widget.servings
-                          : widget.recipe.baseServings,
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 10),
-                    child: Row(children: <Widget>[
-                      Expanded(
-                          child: Text(ing.item,
-                              style:
-                                  const TextStyle(fontSize: 15, color: kInk))),
-                      const SizedBox(width: 12),
-                      Text(ing.scaled(widget.factor),
-                          style: mono(
-                              size: 14,
-                              weight: FontWeight.w600,
-                              color: kOlive)),
-                    ]),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
+      builder: (_) => CookWeightsPanel(session: s),
     );
   }
 
-  Widget _navBtn(String label, VoidCallback onTap, {bool primary = false}) {
+  /// Finished. The handoff happens HERE and not when the measuring was done,
+  /// because the weights are only true once the cooking is over.
+  Future<void> _done() async {
+    final CookSession? s = widget.session;
+    CookTimers.instance.clearAll();
+    if (s == null) {
+      Navigator.pop(context);
+      return;
+    }
+    final bool send = await showModalBottomSheet<bool>(
+          context: context,
+          backgroundColor: kCard,
+          shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+          builder: (BuildContext ctx) => SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(22, 22, 22, 24),
+              child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
+                Text('Send it to BodyComp?',
+                    style: serif(size: 20, weight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Text(
+                    'The weights you recorded go over for logging, and come '
+                    'off the pantry. Check them first if anything changed.',
+                    textAlign: TextAlign.center,
+                    style:
+                        TextStyle(fontSize: 13.5, color: kMuted, height: 1.4)),
+                const SizedBox(height: 18),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(ctx, true),
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: kOlive,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12))),
+                    child: Text('Send to BodyComp',
+                        style: serif(
+                            size: 16,
+                            weight: FontWeight.w600,
+                            color: Colors.white)),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _showWeights();
+                    },
+                    child: Text('Check the weights first',
+                        style: TextStyle(color: kOlive))),
+                TextButton(
+                    onPressed: () => Navigator.pop(ctx, false),
+                    child: Text('Not now', style: TextStyle(color: kMuted))),
+              ]),
+            ),
+          ),
+        ) ??
+        false;
+    if (!mounted) {
+      return;
+    }
+    if (!send) {
+      Navigator.pop(context);
+      return;
+    }
+    setState(() => _sending = true);
+    await sendCookedMeal(
+      context: context,
+      session: s,
+      onUse: widget.onUse,
+      onSent: widget.onSent,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() => _sending = false);
+    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
+  }
+
+  Widget _navBtn(String label, VoidCallback? onTap, {bool primary = false}) {
     return SizedBox(
       height: _counter ? 64 : 52,
       width: _counter ? 170 : 130,
@@ -3047,92 +3139,363 @@ Future<T?> withSpinner<T>(
 // pantry and what BodyComp logs, so this screen is the only place it is ever
 // true.
 // ═══════════════════════════════════════════════════════════════════════
+// MEASURING — what actually went in the pan.
+//
+// The weights live in the CookSession, not in this screen, because they keep
+// changing after you leave it: something bakes longer, you top up the stock.
+// Cooking mode shows the same numbers in a pull-up panel, and the handoff at
+// the end reads them, so nothing is ever typed twice.
+//
+// Every line is editable whatever unit the recipe used. The field does not
+// change the recipe; it records what happened. A cook weighing his spices
+// should not be told he can't.
+// ═══════════════════════════════════════════════════════════════════════
 
-/// Strip a food name down to something two spellings of it can agree on.
-String _foodKey(String s) => s
-    .toLowerCase()
-    .replaceAll(RegExp(r'\([^)]*\)'), ' ') // "(drained)" says nothing useful
-    .replaceAll(RegExp(r'[^a-z]+'), ' ')
-    .trim();
+/// One ingredient: what it is, where it comes from, and what you weighed.
+/// Shared by the measuring screen and the weights panel in cooking mode.
+class CookWeightRow extends StatelessWidget {
+  final CookSession session;
+  final CookEntry entry;
+  final String prep; // knife work from the bowl, when there is any
+  final bool dense;
+  const CookWeightRow({
+    super.key,
+    required this.session,
+    required this.entry,
+    this.prep = '',
+    this.dense = false,
+  });
 
-/// The pantry item an ingredient most likely refers to, or null.
-///
-/// Exact normalised match first, then containment either way, preferring the
-/// shortest hit so "chicken" doesn't win over "chicken thighs" when both are
-/// on the shelf. Spices and quantity-unknown items are skipped: they carry no
-/// weight or price, so there is nothing to take off them.
-PantryItem? matchPantryItem(String ingredient, List<PantryItem> pantry) {
-  final String want = _foodKey(ingredient);
-  if (want.isEmpty) {
-    return null;
+  @override
+  Widget build(BuildContext context) {
+    final PantryItem? link = session.pantryFor(entry);
+    return Padding(
+      padding: EdgeInsets.fromLTRB(16, dense ? 7 : 9, 16, dense ? 7 : 9),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(entry.item,
+                    style: const TextStyle(fontSize: 15.5, color: kInk)),
+                if (prep.isNotEmpty)
+                  Text(prep, style: TextStyle(fontSize: 12.5, color: kMuted)),
+                const SizedBox(height: 5),
+                _linkChip(context, link),
+              ]),
+        ),
+        const SizedBox(width: 10),
+        _gramsField(),
+      ]),
+    );
   }
-  final List<PantryItem> usable = pantry
-      .where((PantryItem p) => !p.deleted && !p.spice && !p.quantityUnknown)
-      .toList();
-  for (final PantryItem p in usable) {
-    if (_foodKey(p.name) == want) {
-      return p;
+
+  /// Where this comes off the shelf. This used to be an 11px grey line, which
+  /// hid the most important control on the row: if a thing is not in the
+  /// pantry, nothing gets subtracted for it and you need to know.
+  Widget _linkChip(BuildContext context, PantryItem? link) {
+    final bool none = link == null;
+    return Material(
+      color: none ? kWarn.withValues(alpha: 0.14) : kInset,
+      borderRadius: BorderRadius.circular(20),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: () => _pick(context),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+          child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            Icon(none ? Icons.add_link_rounded : Icons.link_rounded,
+                size: 14, color: none ? kWarn : kOlive),
+            const SizedBox(width: 5),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 190),
+              child: Text(none ? 'Not from my pantry — tap to pick' : link.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: none ? kWarn : kOlive)),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  Widget _gramsField() {
+    return SizedBox(
+      width: 96,
+      height: 42,
+      child: TextField(
+        controller: entry.grams,
+        keyboardType: const TextInputType.numberWithOptions(decimal: true),
+        textAlign: TextAlign.right,
+        style: mono(size: 15, weight: FontWeight.w700, color: kOlive),
+        decoration: InputDecoration(
+          isDense: true,
+          // The recipe's own amount sits behind the field, so a line the
+          // recipe gave in spoons still says what it asked for.
+          hintText: entry.startedFromRecipe ? '0' : entry.recipeAmount,
+          hintStyle: mono(size: 12, color: kFaint),
+          suffixText: 'g',
+          suffixStyle: mono(size: 12, color: kMuted),
+          filled: true,
+          fillColor: kInset,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: kBorder)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(8),
+              borderSide: const BorderSide(color: kBorder)),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pick(BuildContext context) async {
+    final List<PantryItem> usable = session.pantry
+        .where((PantryItem p) => !p.deleted && !p.spice && !p.quantityUnknown)
+        .toList()
+      ..sort((PantryItem a, PantryItem b) =>
+          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    final String? picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: kCard,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (BuildContext ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.75),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
+            children: <Widget>[
+              Text('WHERE DOES THIS COME FROM?',
+                  style: labelCaps(color: kAccent)),
+              const SizedBox(height: 4),
+              Text(entry.item, style: serif(size: 19, weight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Text('Pick the pantry item it comes out of, so the right thing '
+                  'is taken off the shelf.',
+                  style: TextStyle(fontSize: 12.5, color: kMuted)),
+              const SizedBox(height: 14),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.swap_horiz_rounded, color: kAccent),
+                title: const Text("I'm out of this",
+                    style: TextStyle(fontSize: 14.5)),
+                subtitle: Text('Find a swap from what you actually have.',
+                    style: TextStyle(fontSize: 11.5, color: kFaint)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  showOutOfSheet(
+                    context: context,
+                    recipe: session.recipe,
+                    ingredient: RecipeIngredient(
+                        item: entry.item, amount: entry.recipeAmount),
+                    pantry: session.pantry,
+                    servings: session.servings,
+                  );
+                },
+              ),
+              const Divider(color: kBorder),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.link_off_rounded, color: kWarn),
+                title: const Text('Not from my pantry',
+                    style: TextStyle(fontSize: 14.5)),
+                subtitle: Text('Nothing is subtracted for this one.',
+                    style: TextStyle(fontSize: 11.5, color: kFaint)),
+                onTap: () => Navigator.pop(ctx, ''),
+              ),
+              const Divider(color: kBorder),
+              for (final PantryItem p in usable)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(p.name, style: const TextStyle(fontSize: 14.5)),
+                  subtitle: Text('${p.remaining.round()} g left',
+                      style: mono(size: 11.5, color: kFaint)),
+                  onTap: () => Navigator.pop(ctx, p.id),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (picked != null) {
+      session.setLink(entry, picked);
     }
   }
-  PantryItem? best;
-  for (final PantryItem p in usable) {
-    final String have = _foodKey(p.name);
-    if (have.isEmpty) {
-      continue;
-    }
-    if (want.contains(have) || have.contains(want)) {
-      if (best == null || have.length < _foodKey(best.name).length) {
-        best = p;
+}
+
+/// The whole list, for the panel you pull up mid-cook.
+class CookWeightsPanel extends StatelessWidget {
+  final CookSession session;
+  const CookWeightsPanel({super.key, required this.session});
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding:
+            EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        child: ConstrainedBox(
+          constraints:
+              BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.85),
+          child: AnimatedBuilder(
+            animation: session,
+            builder: (BuildContext context, _) => ListView(
+              shrinkWrap: true,
+              padding: const EdgeInsets.fromLTRB(4, 18, 4, 20),
+              children: <Widget>[
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(children: <Widget>[
+                    Text('WEIGHTS', style: labelCaps(color: kAccent)),
+                    const Spacer(),
+                    Text('correct anything that changed',
+                        style: mono(size: 11, color: kFaint)),
+                  ]),
+                ),
+                const SizedBox(height: 10),
+                for (final CookEntry e in session.entries)
+                  CookWeightRow(session: session, entry: e, dense: true),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// HANDOFF — one meal, every ingredient, each tagged with the pan it cooked
+// in. No portions: BodyComp works those out, and it is the only one of the
+// two that knows what ended up on the plate.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Which pan an ingredient was cooked in, per the chef's plan. Empty when it
+/// was never cooked with anything.
+String _panFor(CookSession session, CookEntry e) {
+  final PrepPlan? plan = session.plan;
+  if (plan == null) {
+    return '';
+  }
+  for (final CookGroup g in plan.cookGroups) {
+    for (final String name in g.items) {
+      if (foodKey(name) == foodKey(e.item)) {
+        return g.name;
       }
     }
   }
-  return best;
+  return '';
 }
 
+/// Send the cook to BodyComp, then take what it used off the shelf.
+///
+/// Order matters: nothing is subtracted until the handoff has actually
+/// landed, so a failed send leaves the shelf untouched and can be retried
+/// without double-counting.
+Future<bool> sendCookedMeal({
+  required BuildContext context,
+  required CookSession session,
+  void Function(PantryItem item, double grams)? onUse,
+  void Function(String title)? onSent,
+}) async {
+  final List<CookEntry> weighed = session.weighed;
+  if (weighed.isEmpty) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('Nothing weighed yet.')));
+    return false;
+  }
+  if (!CookedSync.canWrite) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('This build has no write token, so it can only read.')));
+    return false;
+  }
+
+  final CookedMeal meal = CookedMeal(
+    id: '${DateTime.now().millisecondsSinceEpoch}',
+    recipe: session.recipe.title,
+    servings: session.servings,
+    cookedAtMs: DateTime.now().millisecondsSinceEpoch,
+    lines: <CookedLine>[
+      for (final CookEntry e in weighed)
+        CookedLine(
+          name: e.item,
+          rawG: e.measuredG,
+          pantryId: e.pantryId,
+          barcode: session.pantryFor(e)?.barcode,
+          group: _panFor(session, e),
+        ),
+    ],
+  );
+
+  final bool ok = await CookedSync.send(meal);
+  if (!context.mounted) {
+    return ok;
+  }
+  if (!ok) {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content:
+            Text("Couldn't reach GitHub. Nothing was subtracted — try again.")));
+    return false;
+  }
+
+  int taken = 0;
+  for (final CookEntry e in weighed) {
+    final PantryItem? p = session.pantryFor(e);
+    if (p != null) {
+      onUse?.call(p, e.measuredG);
+      taken++;
+    }
+  }
+  onSent?.call(session.recipe.title);
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Sent to BodyComp. '
+            '$taken ${taken == 1 ? 'item' : 'items'} came off the shelf.')));
+  }
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MISE EN PLACE — measure everything out before the pan gets hot.
+//
+// The bowls come from the chef, because the grouping is a judgement call: two
+// things can go in at the same moment and still have to be kept apart until
+// then. A bowl is only a hint about washing up; every ingredient is weighed
+// on its own regardless.
+// ═══════════════════════════════════════════════════════════════════════
+
 class PrepScreen extends StatefulWidget {
-  final Recipe recipe;
-  final int servings;
-  final List<PantryItem> pantry;
+  final CookSession session;
 
-  /// Take [grams] off a pantry item. Wired to the same path the Use(−) button
-  /// uses, so the spending ledger and the GitHub push come along for free.
-  final void Function(PantryItem item, double grams)? onUse;
+  /// Straight into cooking from here, carrying the same weights.
+  final VoidCallback? onStartCooking;
 
-  /// The meal reached BodyComp. Used to mark it cooked in one move.
-  final void Function(String title)? onSent;
-
-  const PrepScreen({
-    super.key,
-    required this.recipe,
-    required this.servings,
-    this.pantry = const <PantryItem>[],
-    this.onUse,
-    this.onSent,
-  });
+  const PrepScreen({super.key, required this.session, this.onStartCooking});
 
   @override
   State<PrepScreen> createState() => _PrepScreenState();
 }
 
 class _PrepScreenState extends State<PrepScreen> {
-  PrepPlan? _plan;
   bool _loading = true;
-  bool _sending = false;
   String _error = '';
 
-  /// One tick per item, in bowl-then-item order.
-  Set<String> _done = <String>{};
+  /// One tick per ingredient, by name, so it survives a rebuild.
+  final Set<String> _done = <String>{};
 
-  /// Keyed by ingredient name, because that is what the cook groups refer to.
-  final Map<String, TextEditingController> _measured =
-      <String, TextEditingController>{};
-  final Map<String, String> _link = <String, String>{}; // '' = deliberately none
-
-  String get _cacheKey => widget.recipe.title;
-
-  double get _factor => widget.recipe.baseServings == 0
-      ? 1
-      : widget.servings / widget.recipe.baseServings;
+  CookSession get _s => widget.session;
+  String get _cacheKey => _s.recipe.title;
 
   @override
   void initState() {
@@ -3140,24 +3503,13 @@ class _PrepScreenState extends State<PrepScreen> {
     _load();
   }
 
-  @override
-  void dispose() {
-    for (final TextEditingController c in _measured.values) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
   Future<void> _load({bool force = false}) async {
     if (!force) {
       final PrepPlan? cached = PrepPlan.decode(LocalCache.loadPrep(_cacheKey),
-          baseServings: widget.recipe.baseServings);
+          baseServings: _s.recipe.baseServings);
       if (cached != null && !cached.isEmpty) {
-        setState(() {
-          _plan = cached;
-          _loading = false;
-        });
-        _seed(cached);
+        _s.setPlan(cached);
+        setState(() => _loading = false);
         return;
       }
     }
@@ -3166,17 +3518,13 @@ class _PrepScreenState extends State<PrepScreen> {
       _error = '';
     });
     try {
-      final PrepPlan plan = await Chef.planPrep(widget.recipe);
+      final PrepPlan plan = await Chef.planPrep(_s.recipe);
       if (!mounted) {
         return;
       }
       LocalCache.savePrep(_cacheKey, plan.encode());
-      setState(() {
-        _plan = plan;
-        _done = <String>{};
-        _loading = false;
-      });
-      _seed(plan);
+      _s.setPlan(plan);
+      setState(() => _loading = false);
     } on ChefException catch (e) {
       if (!mounted) {
         return;
@@ -3196,122 +3544,55 @@ class _PrepScreenState extends State<PrepScreen> {
     }
   }
 
-  /// Prefill every weighable line with the recipe's amount and its best guess
-  /// at the pantry item, so an untouched line still sends something true.
-  void _seed(PrepPlan plan) {
-    for (final PrepBowl b in plan.bowls) {
-      for (final PrepItem i in b.items) {
-        final String scaled = i.scaled(_factor);
-        if (!isGramAmount(scaled)) {
-          continue;
+  void _toggle(String name) => setState(() {
+        if (!_done.remove(name)) {
+          _done.add(name);
         }
-        _measured.putIfAbsent(
-            i.item,
-            () => TextEditingController(
-                text: _trim(amountValue(scaled) ?? 0)));
-        if (!_link.containsKey(i.item)) {
-          final PantryItem? m = matchPantryItem(i.item, widget.pantry);
-          if (m != null) {
-            _link[i.item] = m.id;
-          }
-        }
-      }
-    }
-    if (mounted) {
-      setState(() {});
-    }
-  }
-
-  static String _trim(double v) =>
-      v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
-
-  PantryItem? _linked(String ingredient) {
-    final String? id = _link[ingredient];
-    if (id == null || id.isEmpty) {
-      return null;
-    }
-    for (final PantryItem p in widget.pantry) {
-      if (p.id == id) {
-        return p;
-      }
-    }
-    return null;
-  }
-
-  String _id(int bowl, int item) => '$bowl:$item';
-
-  void _toggle(int bowl, int item) {
-    final String id = _id(bowl, item);
-    setState(() {
-      if (!_done.remove(id)) {
-        _done.add(id);
-      }
-    });
-  }
-
-  /// Ticking the header does the whole bowl, either way.
-  void _toggleBowl(int bowl, PrepBowl b) {
-    final List<String> ids = <String>[
-      for (int i = 0; i < b.items.length; i++) _id(bowl, i)
-    ];
-    final bool allDone = ids.every(_done.contains);
-    setState(() {
-      if (allDone) {
-        _done.removeAll(ids);
-      } else {
-        _done.addAll(ids);
-      }
-    });
-  }
+      });
 
   @override
   Widget build(BuildContext context) {
-    final PrepPlan? plan = _plan;
-    final int total = plan?.itemCount ?? 0;
+    final int total = _s.entries.length;
     return Scaffold(
       appBar: AppBar(
         title: Text('Measure', style: serif(size: 18)),
         actions: <Widget>[
-          if (plan != null)
+          if (!_loading)
             IconButton(
               tooltip: 'Plan it again',
-              onPressed: _loading ? null : () => _load(force: true),
+              onPressed: () => _load(force: true),
               icon: const Icon(Icons.refresh_rounded),
             ),
-          if (total > 0)
-            Center(
-                child: Padding(
-              padding: const EdgeInsets.only(right: 16, left: 4),
-              child: Text('${_done.length} / $total',
-                  style: mono(size: 13, color: kMuted)),
-            )),
+          Center(
+              child: Padding(
+            padding: const EdgeInsets.only(right: 16, left: 4),
+            child: Text('${_done.length} / $total',
+                style: mono(size: 13, color: kMuted)),
+          )),
         ],
       ),
       body: _body(),
-      bottomNavigationBar: (plan == null || plan.isEmpty) ? null : _sendBar(),
+      bottomNavigationBar: _loading ? null : _startBar(),
     );
   }
 
-  Widget _sendBar() {
+  Widget _startBar() {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
         child: SizedBox(
           height: 52,
           child: ElevatedButton.icon(
-            onPressed: _sending ? null : _send,
-            icon: _sending
-                ? const SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(
-                        strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.send_rounded, size: 18),
-            label: Text(_sending ? 'Sending…' : 'Done, send to BodyComp',
+            onPressed: () {
+              Navigator.pop(context);
+              widget.onStartCooking?.call();
+            },
+            icon: const Icon(Icons.local_fire_department_rounded, size: 18),
+            label: Text('Start cooking',
                 style: serif(
                     size: 16, weight: FontWeight.w600, color: Colors.white)),
             style: ElevatedButton.styleFrom(
-                backgroundColor: kOlive,
+                backgroundColor: kAccent,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12))),
@@ -3332,53 +3613,51 @@ class _PrepScreenState extends State<PrepScreen> {
         ]),
       );
     }
-    if (_error.isNotEmpty) {
-      return Center(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
-            Text(_error,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 14, color: kWarn)),
-            const SizedBox(height: 16),
-            OutlinedButton(
-                onPressed: () => _load(force: true),
-                style: OutlinedButton.styleFrom(
-                    foregroundColor: kAccent,
-                    side: BorderSide(color: kAccent.withValues(alpha: 0.5))),
-                child: const Text('Retry')),
-          ]),
-        ),
-      );
-    }
-    final PrepPlan? plan = _plan;
-    if (plan == null || plan.isEmpty) {
-      return Center(
-          child: Text('Nothing to measure.',
-              style: TextStyle(fontSize: 14, color: kMuted)));
-    }
 
     final bool wide = MediaQuery.sizeOf(context).width >= kSplitMinWidth;
-    final List<Widget> cards = <Widget>[
-      for (int b = 0; b < plan.bowls.length; b++) _bowlCard(b, plan.bowls[b]),
-    ];
+    final PrepPlan? plan = _s.plan;
+    final List<Widget> cards = <Widget>[];
+    final Set<String> placed = <String>{};
 
-    return ListView(
-      padding: pagePadding(context,
-          top: 16, bottom: 24, maxWidth: wide ? 1000 : 640),
-      children: <Widget>[
-        Text(widget.recipe.title,
-            style: serif(size: 22, weight: FontWeight.w600, height: 1.15)),
-        const SizedBox(height: 4),
-        Text(
-            '${plan.bowls.length} ${plan.bowls.length == 1 ? 'bowl' : 'bowls'}'
-            ' for ${widget.servings} '
-            '${widget.servings == 1 ? 'serving' : 'servings'}'
-            ' · edit a weight if it came out different',
-            style: mono(size: 12, color: kMuted)),
-        const SizedBox(height: 18),
-        if (wide) _twoColumns(cards) else ...cards,
-      ],
+    if (plan != null) {
+      for (int b = 0; b < plan.bowls.length; b++) {
+        cards.add(_bowlCard(plan.bowls[b], placed));
+      }
+    }
+    // Anything the plan didn't mention still has to be weighable.
+    final List<CookEntry> rest = _s.entries
+        .where((CookEntry e) => !placed.contains(foodKey(e.item)))
+        .toList();
+    if (rest.isNotEmpty) {
+      cards.add(_card(plan == null ? 'Ingredients' : 'Everything else',
+          <Widget>[
+            for (final CookEntry e in rest)
+              CookWeightRow(session: _s, entry: e),
+          ], 0));
+    }
+
+    return AnimatedBuilder(
+      animation: _s,
+      builder: (BuildContext context, _) => ListView(
+        padding: pagePadding(context,
+            top: 16, bottom: 24, maxWidth: wide ? 1000 : 640),
+        children: <Widget>[
+          Text(_s.recipe.title,
+              style: serif(size: 22, weight: FontWeight.w600, height: 1.15)),
+          const SizedBox(height: 4),
+          Text(
+              'for ${_s.servings} '
+              '${_s.servings == 1 ? 'serving' : 'servings'}'
+              ' · type what the scale actually says',
+              style: mono(size: 12, color: kMuted)),
+          if (_error.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            Text(_error, style: const TextStyle(fontSize: 13, color: kWarn)),
+          ],
+          const SizedBox(height: 18),
+          if (wide) _twoColumns(cards) else ...cards,
+        ],
+      ),
     );
   }
 
@@ -3395,507 +3674,68 @@ class _PrepScreenState extends State<PrepScreen> {
     ]);
   }
 
-  Widget _bowlCard(int bowl, PrepBowl b) {
-    final List<String> ids = <String>[
-      for (int i = 0; i < b.items.length; i++) _id(bowl, i)
-    ];
-    final bool allDone = ids.isNotEmpty && ids.every(_done.contains);
-    return Container(
-      margin: const EdgeInsets.only(bottom: 14),
-      decoration: BoxDecoration(
-        color: allDone ? kInset : kCard,
-        borderRadius: BorderRadius.circular(14),
-        border:
-            Border.all(color: allDone ? kOlive.withValues(alpha: 0.45) : kBorder),
-      ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-        InkWell(
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(14)),
-          onTap: () => _toggleBowl(bowl, b),
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
-            child: Row(children: <Widget>[
-              Icon(
-                  allDone
-                      ? Icons.check_circle_rounded
-                      : Icons.radio_button_unchecked_rounded,
-                  size: 20,
-                  color: allDone ? kOlive : kFaint),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(b.label,
-                    style: serif(
-                        size: 17,
-                        weight: FontWeight.w600,
-                        color: allDone ? kMuted : kInk)),
-              ),
-              if (b.step > 0)
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                  decoration: BoxDecoration(
-                      color: kAccent.withValues(alpha: 0.10),
-                      borderRadius: BorderRadius.circular(20)),
-                  child: Text('STEP ${b.step}',
-                      style: mono(
-                          size: 10, weight: FontWeight.w700, color: kAccent)),
-                ),
-            ]),
-          ),
-        ),
-        const Divider(height: 1, color: kBorder),
-        for (int i = 0; i < b.items.length; i++) _itemRow(bowl, i, b.items[i]),
-        const SizedBox(height: 6),
-      ]),
-    );
-  }
-
-  Widget _itemRow(int bowl, int i, PrepItem item) {
-    final bool done = _done.contains(_id(bowl, i));
-    final String scaled = item.scaled(_factor);
-    final TextEditingController? ctl = _measured[item.item];
-    final PantryItem? link = _linked(item.item);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 9, 16, 9),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+  Widget _bowlCard(PrepBowl b, Set<String> placed) {
+    final List<Widget> rows = <Widget>[];
+    for (final PrepItem i in b.items) {
+      final CookEntry? e = _s.byName(i.item);
+      if (e == null) {
+        continue;
+      }
+      placed.add(foodKey(e.item));
+      rows.add(Row(children: <Widget>[
         InkWell(
           borderRadius: BorderRadius.circular(6),
-          onTap: () => _toggle(bowl, i),
+          onTap: () => _toggle(e.item),
           child: Padding(
-            padding: const EdgeInsets.only(top: 2, right: 12),
+            padding: const EdgeInsets.only(left: 14, top: 10, bottom: 10),
             child: Icon(
-                done
+                _done.contains(e.item)
                     ? Icons.check_box_rounded
                     : Icons.check_box_outline_blank_rounded,
                 size: 22,
-                color: done ? kOlive : kFaint),
+                color: _done.contains(e.item) ? kOlive : kFaint),
           ),
         ),
         Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                GestureDetector(
-                  onTap: () => _toggle(bowl, i),
-                  child: Text(item.item,
-                      style: TextStyle(
-                        fontSize: 15.5,
-                        color: done ? kFaint : kInk,
-                        decoration: done
-                            ? TextDecoration.lineThrough
-                            : TextDecoration.none,
-                        decorationColor: kFaint,
-                      )),
-                ),
-                if (item.prep.isNotEmpty)
-                  Text(item.prep,
-                      style: TextStyle(fontSize: 12.5, color: kMuted)),
-                if (ctl != null) _linkLine(item.item, link),
-              ]),
-        ),
-        const SizedBox(width: 10),
-        if (ctl == null)
-          // Spoons and "to taste" are cooked with but never weighed, so they
-          // are shown and nothing more.
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Text(scaled,
-                style: mono(
-                    size: 15,
-                    weight: FontWeight.w700,
-                    color: done ? kFaint : kOlive)),
-          )
-        else
-          _gramsField(ctl, done),
-      ]),
-    );
+            child: CookWeightRow(session: _s, entry: e, prep: i.prep)),
+      ]));
+    }
+    return _card(b.label, rows, b.step);
   }
 
-  Widget _gramsField(TextEditingController ctl, bool done) {
-    return SizedBox(
-      width: 92,
-      height: 40,
-      child: TextField(
-        controller: ctl,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        textAlign: TextAlign.right,
-        style: mono(
-            size: 15, weight: FontWeight.w700, color: done ? kFaint : kOlive),
-        decoration: InputDecoration(
-          isDense: true,
-          suffixText: 'g',
-          suffixStyle: mono(size: 12, color: kMuted),
-          filled: true,
-          fillColor: kInset,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-          border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: kBorder)),
-          enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(8),
-              borderSide: const BorderSide(color: kBorder)),
-        ),
+  Widget _card(String title, List<Widget> rows, int step) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kBorder),
       ),
-    );
-  }
-
-  /// Which pantry item this line draws down. Tap to change or clear it.
-  Widget _linkLine(String ingredient, PantryItem? link) {
-    return InkWell(
-      borderRadius: BorderRadius.circular(6),
-      onTap: () => _pickPantryItem(ingredient),
-      child: Padding(
-        padding: const EdgeInsets.only(top: 3, bottom: 1),
-        child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
-          Icon(link == null ? Icons.link_off_rounded : Icons.link_rounded,
-              size: 12, color: link == null ? kWarn : kFaint),
-          const SizedBox(width: 5),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 220),
-            child: Text(link == null ? 'not in your pantry' : link.name,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                    fontSize: 11.5, color: link == null ? kWarn : kMuted)),
-          ),
-        ]),
-      ),
-    );
-  }
-
-  Future<void> _pickPantryItem(String ingredient) async {
-    final List<PantryItem> usable = widget.pantry
-        .where((PantryItem p) => !p.deleted && !p.spice && !p.quantityUnknown)
-        .toList()
-      ..sort((PantryItem a, PantryItem b) =>
-          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-
-    final String? picked = await showModalBottomSheet<String>(
-      context: context,
-      backgroundColor: kCard,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (BuildContext ctx) => SafeArea(
-        child: ConstrainedBox(
-          constraints:
-              BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.75),
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-            children: <Widget>[
-              Text('WHAT IS THIS?', style: labelCaps(color: kAccent)),
-              const SizedBox(height: 4),
-              Text(ingredient, style: serif(size: 19, weight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Text('Pick what it comes out of, so the right thing is taken '
-                  'off the shelf.',
-                  style: TextStyle(fontSize: 12.5, color: kMuted)),
-              const SizedBox(height: 14),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.link_off_rounded, color: kWarn),
-                title: const Text('Not from my pantry',
-                    style: TextStyle(fontSize: 14.5)),
-                subtitle: Text('Nothing is subtracted for this one.',
-                    style: TextStyle(fontSize: 11.5, color: kFaint)),
-                onTap: () => Navigator.pop(ctx, ''),
-              ),
-              const Divider(color: kBorder),
-              for (final PantryItem p in usable)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title:
-                      Text(p.name, style: const TextStyle(fontSize: 14.5)),
-                  subtitle: Text('${_trim(p.remaining)} g left',
-                      style: mono(size: 11.5, color: kFaint)),
-                  onTap: () => Navigator.pop(ctx, p.id),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-    if (picked == null || !mounted) {
-      return;
-    }
-    setState(() => _link[ingredient] = picked);
-  }
-
-  // ── sending ───────────────────────────────────────────────────────────
-
-  /// Every weighed line, grouped the way it was cooked. Anything the chef did
-  /// not put in a pan (a garnish, something spooned over at the table) lands
-  /// in a trailing group of its own so it is still logged and still leaves the
-  /// pantry.
-  List<(String, List<CookedLine>)> _groupedLines() {
-    final PrepPlan plan = _plan!;
-    final Map<String, CookedLine> lines = <String, CookedLine>{};
-    for (final MapEntry<String, TextEditingController> e in _measured.entries) {
-      final double g = double.tryParse(e.value.text.trim()) ?? 0;
-      if (g <= 0) {
-        continue;
-      }
-      final PantryItem? p = _linked(e.key);
-      lines[e.key] = CookedLine(
-        name: e.key,
-        rawG: g,
-        pantryId: p?.id ?? '',
-        barcode: p?.barcode,
-      );
-    }
-
-    final List<(String, List<CookedLine>)> out = <(String, List<CookedLine>)>[];
-    final Set<String> claimed = <String>{};
-    for (final CookGroup g in plan.cookGroups) {
-      final List<CookedLine> mine = <CookedLine>[];
-      for (final String name in g.items) {
-        final String? hit = lines.keys.firstWhereOrNullKey(name);
-        if (hit != null && !claimed.contains(hit)) {
-          claimed.add(hit);
-          mine.add(lines[hit]!);
-        }
-      }
-      if (mine.isNotEmpty) {
-        out.add((g.name, mine));
-      }
-    }
-    final List<CookedLine> rest = <CookedLine>[
-      for (final String k in lines.keys)
-        if (!claimed.contains(k)) lines[k]!
-    ];
-    if (rest.isNotEmpty) {
-      out.add(('Added at the table', rest));
-    }
-    return out;
-  }
-
-  Future<void> _send() async {
-    final List<(String, List<CookedLine>)> groups = _groupedLines();
-    if (groups.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Nothing weighed yet.')));
-      return;
-    }
-    if (!CookedSync.canWrite) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('This build has no write token, so it can only read.')));
-      return;
-    }
-
-    final List<CookedGroup>? plated = await showModalBottomSheet<List<CookedGroup>>(
-      context: context,
-      backgroundColor: kCard,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (_) => _PlateSheet(groups: groups),
-    );
-    if (plated == null || !mounted) {
-      return;
-    }
-
-    setState(() => _sending = true);
-    final CookedMeal meal = CookedMeal(
-      id: '${DateTime.now().millisecondsSinceEpoch}',
-      recipe: widget.recipe.title,
-      servings: widget.servings,
-      cookedAtMs: DateTime.now().millisecondsSinceEpoch,
-      groups: plated,
-    );
-    final bool ok = await CookedSync.send(meal);
-    if (!mounted) {
-      return;
-    }
-    setState(() => _sending = false);
-    if (!ok) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text(
-              "Couldn't reach GitHub. Nothing was subtracted — try again.")));
-      return;
-    }
-
-    // Only now does the pantry move. If the handoff failed, the shelf is
-    // untouched and the cook can retry without double-subtracting.
-    int taken = 0;
-    for (final CookedGroup g in plated) {
-      for (final CookedLine l in g.lines) {
-        if (l.pantryId.isEmpty) {
-          continue;
-        }
-        for (final PantryItem p in widget.pantry) {
-          if (p.id == l.pantryId) {
-            widget.onUse?.call(p, l.rawG);
-            taken++;
-            break;
-          }
-        }
-      }
-    }
-    widget.onSent?.call(widget.recipe.title);
-    if (!mounted) {
-      return;
-    }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Sent to BodyComp. '
-            '$taken ${taken == 1 ? 'item' : 'items'} came off the shelf.')));
-    Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
-  }
-}
-
-/// Helper for the name join: cook groups name ingredients the way the recipe
-/// does, but a stray "(drained)" or a plural shouldn't break the match.
-extension _KeyLookup on Iterable<String> {
-  String? firstWhereOrNullKey(String wanted) {
-    final String w = _foodKey(wanted);
-    for (final String k in this) {
-      if (_foodKey(k) == w) {
-        return k;
-      }
-    }
-    for (final String k in this) {
-      final String kk = _foodKey(k);
-      if (kk.isNotEmpty && (kk.contains(w) || w.contains(kk))) {
-        return k;
-      }
-    }
-    return null;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-// PLATE SHEET — the last thing before it goes: how much of each pan ended up
-// on your plate. BodyComp divides by what the pan is reckoned to have made.
-// ═══════════════════════════════════════════════════════════════════════
-
-class _PlateSheet extends StatefulWidget {
-  final List<(String, List<CookedLine>)> groups;
-  const _PlateSheet({required this.groups});
-
-  @override
-  State<_PlateSheet> createState() => _PlateSheetState();
-}
-
-class _PlateSheetState extends State<_PlateSheet> {
-  late final List<TextEditingController> _ctl = <TextEditingController>[
-    for (int i = 0; i < widget.groups.length; i++) TextEditingController()
-  ];
-
-  @override
-  void dispose() {
-    for (final TextEditingController c in _ctl) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
-      child: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(22, 20, 22, 24),
-          child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text('ON YOUR PLATE', style: labelCaps(color: kAccent)),
-                const SizedBox(height: 6),
-                Text('Weigh what you took from each pan.',
-                    style: serif(size: 19, weight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                Text('Leave one blank if you did not have any of it.',
-                    style: TextStyle(fontSize: 12.5, color: kMuted)),
-                const SizedBox(height: 18),
-                for (int i = 0; i < widget.groups.length; i++) _row(i),
-                const SizedBox(height: 20),
-                SizedBox(
-                  width: double.infinity,
-                  height: 50,
-                  child: ElevatedButton(
-                    onPressed: _submit,
-                    style: ElevatedButton.styleFrom(
-                        backgroundColor: kOlive,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12))),
-                    child: Text('Send',
-                        style: serif(
-                            size: 16,
-                            weight: FontWeight.w600,
-                            color: Colors.white)),
-                  ),
-                ),
-              ]),
-        ),
-      ),
-    );
-  }
-
-  Widget _row(int i) {
-    final (String, List<CookedLine>) g = widget.groups[i];
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Row(children: <Widget>[
-        Expanded(
-          child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(g.$1,
-                    style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600, color: kInk)),
-                Text(
-                    g.$2.map((CookedLine l) => l.name).join(', '),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(fontSize: 11.5, color: kFaint)),
-              ]),
-        ),
-        const SizedBox(width: 12),
-        SizedBox(
-          width: 100,
-          height: 44,
-          child: TextField(
-            controller: _ctl[i],
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            textAlign: TextAlign.right,
-            style: mono(size: 15, weight: FontWeight.w700, color: kOlive),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: '0',
-              hintStyle: mono(size: 15, color: kFaint),
-              suffixText: 'g',
-              suffixStyle: mono(size: 12, color: kMuted),
-              filled: true,
-              fillColor: kInset,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
-              border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: kBorder)),
-              enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(8),
-                  borderSide: const BorderSide(color: kBorder)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 12, 10),
+          child: Row(children: <Widget>[
+            Expanded(
+              child: Text(title,
+                  style: serif(size: 17, weight: FontWeight.w600)),
             ),
-          ),
+            if (step > 0)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                decoration: BoxDecoration(
+                    color: kAccent.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(20)),
+                child: Text('STEP $step',
+                    style: mono(
+                        size: 10, weight: FontWeight.w700, color: kAccent)),
+              ),
+          ]),
         ),
+        const Divider(height: 1, color: kBorder),
+        ...rows,
+        const SizedBox(height: 6),
       ]),
     );
-  }
-
-  void _submit() {
-    final List<CookedGroup> out = <CookedGroup>[
-      for (int i = 0; i < widget.groups.length; i++)
-        CookedGroup(
-          name: widget.groups[i].$1,
-          plateG: double.tryParse(_ctl[i].text.trim()) ?? 0,
-          lines: widget.groups[i].$2,
-        ),
-    ];
-    Navigator.pop(context, out);
   }
 }
 
