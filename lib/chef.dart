@@ -1068,6 +1068,29 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   /// Prices for things the user has bought before but does NOT currently have
   /// in the pantry — so the chef can price familiar new buys accurately. Skips
   /// anything already listed as in-stock.
+  /// A food's name with the brand and packaging stripped, so "Chicken Breast
+  /// Fillets (Co-op)" and "Boneless, Skinless Chicken Breast Fillet (Just
+  /// BARE)" are recognised as the same thing to be priced.
+  static String _foodKey(String s) => s
+      .toLowerCase()
+      .replaceAll(RegExp(r'\([^)]*\)'), ' ')
+      .replaceAll(
+          RegExp(r'\b(boneless|skinless|fresh|organic|raw|frozen|fillets?|'
+              r'extra|lean|style|whole|large|small)\b'),
+          ' ')
+      .replaceAll(RegExp(r'[^a-z]+'), ' ')
+      .trim();
+
+  /// A price no grocery shop charges, which means the pack weight was
+  /// mistyped when it was scanned. Spices are exempt: they genuinely cost a
+  /// fortune per pound and a recipe uses a gram of them.
+  static bool _absurdPrice(PriceEntry e) {
+    if (e.isCount) {
+      return e.unitPrice > 25; // $25 for one of a thing
+    }
+    return e.unitPrice > 0.11; // about $50/lb
+  }
+
   static String formatKnownPrices(PriceBook prices, List<PantryItem> pantry) {
     if (prices.isEmpty) {
       return '';
@@ -1076,10 +1099,35 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
         .where((PantryItem i) => !i.deleted && (i.remaining > 0 || i.untracked))
         .map((PantryItem i) => i.name.trim().toLowerCase())
         .toSet();
-    final List<PriceEntry> known = prices.byName.values
-        .where((PriceEntry e) =>
-            e.unitPrice > 0 && !inStock.contains(e.name.trim().toLowerCase()))
-        .toList()
+    // The chef is told to quote these EXACTLY, so anything wrong here lands
+    // straight in the cost of dinner. Two things go wrong in a real price
+    // book, and both did:
+    //
+    //  * The same food appears several times at different prices, because it
+    //    was bought at different shops under different brand names. Chicken
+    //    breast sat at both $5.67 and $22.68 a pound. Quoting the dear one
+    //    made an ordinary dinner look like a night out.
+    //  * A pack weight gets mistyped once and the unit price is nonsense
+    //    forever after — orange juice at $226 a pound.
+    //
+    // So: collapse each food to the CHEAPEST price recorded for it, and drop
+    // the impossible ones entirely. Dropping is better than quoting them,
+    // because the chef falls back to estimating an ordinary grocery price,
+    // which is far closer to the truth than the bad number.
+    final Map<String, PriceEntry> best = <String, PriceEntry>{};
+    for (final PriceEntry e in prices.byName.values) {
+      if (e.unitPrice <= 0 ||
+          inStock.contains(e.name.trim().toLowerCase()) ||
+          _absurdPrice(e)) {
+        continue;
+      }
+      final String key = '${e.isCount ? 'n' : 'g'}:${_foodKey(e.name)}';
+      final PriceEntry? had = best[key];
+      if (had == null || e.unitPrice < had.unitPrice) {
+        best[key] = e;
+      }
+    }
+    final List<PriceEntry> known = best.values.toList()
       ..sort((PriceEntry a, PriceEntry b) =>
           a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     if (known.isEmpty) {

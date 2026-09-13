@@ -2054,7 +2054,17 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
   final PageController _pc = PageController();
   int _page = 0;
   late bool _twoPane = LocalCache.prefBool(kPrefTwoPane, fallback: true);
-  late bool _counter = LocalCache.prefBool(kPrefCounter);
+  // On by default on a tablet, because that is the whole point of cooking
+  // off one: hands busy, screen propped up, tap anywhere to go on. It was
+  // off behind an unlabelled icon, so it may as well not have existed.
+  late bool _counter =
+      LocalCache.prefBool(kPrefCounter, fallback: _isTablet);
+  bool get _isTablet =>
+      WidgetsBinding.instance.platformDispatcher.views.first.physicalSize
+              .shortestSide /
+          WidgetsBinding.instance.platformDispatcher.views.first
+              .devicePixelRatio >=
+      600;
   bool _sending = false;
 
   @override
@@ -2117,26 +2127,22 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
       appBar: AppBar(
         title: Text('Cooking', style: serif(size: 18)),
         actions: <Widget>[
-          IconButton(
-            tooltip: 'Weights',
-            onPressed: _showWeights,
-            icon: const Icon(Icons.scale_rounded),
-          ),
+          _barToggle(
+              label: 'Weights',
+              icon: Icons.scale_rounded,
+              on: false,
+              onTap: _showWeights),
           if (wide)
-            IconButton(
-              tooltip: _twoPane ? 'One step at a time' : 'Show the method',
-              onPressed: () => _setTwoPane(!_twoPane),
-              icon: Icon(_twoPane
-                  ? Icons.crop_portrait_rounded
-                  : Icons.vertical_split_rounded),
-              color: _twoPane ? kAccent : kInk,
-            ),
-          IconButton(
-            tooltip: _counter ? 'Normal size' : 'Counter mode',
-            onPressed: () => _setCounter(!_counter),
-            icon: const Icon(Icons.format_size_rounded),
-            color: _counter ? kAccent : kInk,
-          ),
+            _barToggle(
+                label: 'Method',
+                icon: Icons.vertical_split_rounded,
+                on: _twoPane,
+                onTap: () => _setTwoPane(!_twoPane)),
+          _barToggle(
+              label: 'Big',
+              icon: Icons.format_size_rounded,
+              on: _counter,
+              onTap: () => _setCounter(!_counter)),
           Center(
               child: Padding(
             padding: const EdgeInsets.only(right: 16, left: 4),
@@ -2304,6 +2310,39 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
   }
 
   // ── ingredients + running out ─────────────────────────────────────────
+
+  /// A toggle you can actually read. Tooltips never appear on a touch
+  /// screen, so a bare glyph in the app bar is a control nobody finds.
+  Widget _barToggle({
+    required String label,
+    required IconData icon,
+    required bool on,
+    required VoidCallback onTap,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 8),
+      child: Material(
+        color: on ? kAccent.withValues(alpha: 0.14) : Colors.transparent,
+        borderRadius: BorderRadius.circular(20),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Row(mainAxisSize: MainAxisSize.min, children: <Widget>[
+              Icon(icon, size: 17, color: on ? kAccent : kMuted),
+              const SizedBox(width: 6),
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: on ? kAccent : kMuted)),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 
   /// The weights, mid-cook. Pulled up from any step, because sometimes you
   /// weigh while it cooks — something takes longer to bake than the recipe
