@@ -84,13 +84,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .withPantry(_items, DateTime.now());
     LocalCache.savePriceBook(_prices.encode());
     _syncFromRemote();
-    // The chef's settings live on GitHub too, so the iPad cooks with the same
-    // equipment and the same avoid list as the phone.
-    ChefSync.pull().then((bool changed) {
-      if (changed && mounted) {
-        setState(() {});
-      }
-    }).catchError((Object _) {});
+    _syncChefProfile();
   }
 
   @override
@@ -106,7 +100,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _syncFromRemote();
+      _syncChefProfile();
     }
+  }
+
+  /// The chef's settings live on GitHub too, so the iPad cooks with the same
+  /// equipment and the same avoid list as the phone. Pulled on the same beats
+  /// as the pantry — open and resume — because a device left open on the
+  /// counter should not be running last week's avoid list.
+  void _syncChefProfile() {
+    ChefSync.pull().then((bool changed) {
+      if (changed && mounted) {
+        setState(() {});
+      }
+    }).catchError((Object _) {});
   }
 
   /// While a push is pending, retry it every 20 s until it lands. Cheap, and it
