@@ -141,7 +141,11 @@ jobs:
           T="${{ env.IOS_DEPLOYMENT_TARGET }}"
           sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = $T;/g" \
             ios/Runner.xcodeproj/project.pbxproj
-          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $T" ios/Flutter/AppFrameworkInfo.plist
+          # Flutter 3.44 dropped MinimumOSVersion from this plist (the target
+          # now comes from the build setting), so Set fails where older
+          # versions succeeded. Add it if missing, and don't care if neither
+          # applies.
+          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $T"             ios/Flutter/AppFrameworkInfo.plist 2>/dev/null             || /usr/libexec/PlistBuddy -c "Add :MinimumOSVersion string $T"               ios/Flutter/AppFrameworkInfo.plist 2>/dev/null || true
           grep -q "IPHONEOS_DEPLOYMENT_TARGET = $T;" ios/Runner.xcodeproj/project.pbxproj
 
       # Camera and photo strings are required or the app dies the moment the
