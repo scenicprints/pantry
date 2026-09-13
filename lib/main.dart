@@ -322,6 +322,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// if it would exceed total, total too). false = used some (clamps at 0).
   /// When a "use" empties a tracked item it moves to the Used-up history; we
   /// offer an Undo that restores what was there before.
+  /// Take what a cooked meal actually used off the shelf. Same path as the
+  /// Use(-) button, so the spending ledger and the GitHub push come along.
+  void _useForCook(PantryItem item, double grams) =>
+      _adjust(item, grams, false);
+
   void _adjust(PantryItem item, double amount, bool add) {
     double? restore;
     double consumed = 0; // amount actually used (for the spending ledger)
@@ -621,7 +626,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _quick.where((QuickAddItem q) => !q.deleted).toList();
     final List<Widget> pages = <Widget>[
       PantryTab(items: visibleItems, onTapItem: _openItem),
-      CookTab(items: visibleItems, prices: _prices),
+      CookTab(items: visibleItems, prices: _prices, onUse: _useForCook),
       QuickAddTab(
           quick: visibleQuick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(
@@ -691,8 +696,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
             )
           : null,
       body: tablet
-          ? CookTab(
-              items: visibleItems, prices: _prices, spending: _usage)
+          ? CookTab(items: visibleItems, prices: _prices, onUse: _useForCook)
           : readableColumn(IndexedStack(index: _tab, children: pages)),
       bottomNavigationBar: tablet
           ? null

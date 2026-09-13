@@ -600,6 +600,33 @@ double _num(dynamic v) {
   return 0;
 }
 
+/// The number an amount string opens with, if it opens with one at all.
+final RegExp _kLeadingNumber = RegExp(r'^\s*(\d+(?:\.\d+)?)');
+
+/// The leading number in an amount string ("480 g" -> 480), or null when
+/// there isn't one ("to taste", "a pinch").
+double? amountValue(String amount) {
+  final RegExpMatch? m = _kLeadingNumber.firstMatch(amount);
+  return m == null ? null : double.tryParse(m.group(1)!);
+}
+
+/// Everything after that number, trimmed ("480 g" -> "g").
+String amountUnit(String amount) {
+  final RegExpMatch? m = _kLeadingNumber.firstMatch(amount);
+  return m == null ? '' : amount.substring(m.end).trim();
+}
+
+/// True when an amount is a plain weight in grams — the only kind this app
+/// can take off the shelf or hand to BodyComp. Spoons, "to taste" and counts
+/// are shown to the cook but never measured or subtracted.
+bool isGramAmount(String amount) {
+  if (amountValue(amount) == null) {
+    return false;
+  }
+  final String u = amountUnit(amount).toLowerCase();
+  return u == 'g' || u == 'gram' || u == 'grams';
+}
+
 /// Scale the leading number in an amount string, keeping the unit text.
 ///
 /// Three kinds of amount round differently, because three different things
@@ -607,7 +634,7 @@ double _num(dynamic v) {
 /// whole units. Spoons exist in quarters. Counts go to halves, so you never
 /// get "0.37 egg".
 String _scaleAmount(String amount, double factor) {
-  final RegExpMatch? m = RegExp(r'^\s*(\d+(?:\.\d+)?)').firstMatch(amount);
+  final RegExpMatch? m = _kLeadingNumber.firstMatch(amount);
   if (m == null) {
     return amount; // "to taste", "a pinch" — leave as-is
   }
@@ -694,11 +721,45 @@ class PrepBowl {
       };
 }
 
+/// A set of ingredients that go in the same pan and come out as one mass.
+///
+/// Not the same thing as a bowl. A bowl saves washing up before cooking; a
+/// cook group is what can still be put on a scale afterwards. Once the sauce
+/// is stirred you cannot weigh the tomato paste again, so the group is the
+/// smallest honest unit for "how much of this did I eat".
+class CookGroup {
+  final String name;
+
+  /// Ingredient names, as written in the recipe's ingredient list.
+  final List<String> items;
+
+  const CookGroup({required this.name, required this.items});
+
+  factory CookGroup.fromJson(Map<String, dynamic> j) => CookGroup(
+        name: (j['name'] as String?)?.trim() ?? '',
+        items: ((j['items'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<String>()
+            .map((String s) => s.trim())
+            .where((String s) => s.isNotEmpty)
+            .toList(),
+      );
+
+  Map<String, dynamic> toJson() =>
+      <String, dynamic>{'name': name, 'items': items};
+}
+
 /// A whole measuring plan for one recipe.
 class PrepPlan {
   final List<PrepBowl> bowls;
+
+  /// What gets cooked together, so the plate weight has something to divide.
+  final List<CookGroup> cookGroups;
   final int baseServings;
-  const PrepPlan({required this.bowls, required this.baseServings});
+  const PrepPlan({
+    required this.bowls,
+    required this.baseServings,
+    this.cookGroups = const <CookGroup>[],
+  });
 
   bool get isEmpty => bowls.isEmpty;
 
@@ -715,11 +776,17 @@ class PrepPlan {
             .map(PrepBowl.fromJson)
             .where((PrepBowl b) => b.items.isNotEmpty)
             .toList(),
+        cookGroups: ((j['cookGroups'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(CookGroup.fromJson)
+            .where((CookGroup g) => g.items.isNotEmpty)
+            .toList(),
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'baseServings': baseServings,
         'bowls': bowls.map((PrepBowl b) => b.toJson()).toList(),
+        'cookGroups': cookGroups.map((CookGroup g) => g.toJson()).toList(),
       };
 
   String encode() => jsonEncode(toJson());

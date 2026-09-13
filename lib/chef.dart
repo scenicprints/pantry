@@ -698,14 +698,28 @@ tied to one. Copy each amount EXACTLY as written below. "prep" is the knife
 work if the ingredient list or a step calls for any ("diced", "thinly sliced"),
 otherwise an empty string.
 
+ALSO say what gets COOKED TOGETHER, in "cookGroups". A cook group is a set of
+ingredients that end up as one mass you could still put on a scale: one tray,
+one pan, one pot. This is a different question from the bowls. Two things can
+share a bowl and end up in different pans, and two things measured separately
+can end up stirred into the same sauce.
+
+- One group per vessel. A side cooked on its own tray is its own group, and
+  that is the whole point of the question.
+- Anything stirred INTO a group belongs to that group, however late it goes in.
+- Anything eaten raw or added at the table (a garnish, a dressing spooned over,
+  salt to taste) goes in NO group. Leave it out.
+- Use the exact ingredient names from the list below, and name each group for
+  its vessel or its dish ("Sheet pan", "Rice pot", "Yogurt sauce").
+
 INGREDIENTS (for ${recipe.baseServings} $servingWord):
 $ing
 STEPS:
 $steps
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}]}''';
+{"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}],"cookGroups":[{"name":"","items":[""]}]}''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2000);
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
     return PrepPlan.fromJson(data, baseServings: recipe.baseServings);
   }
 
