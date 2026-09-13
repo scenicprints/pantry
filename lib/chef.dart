@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
@@ -18,8 +19,10 @@ import 'pricebook.dart';
 //
 // Model default: claude-haiku-4-5 (cheap, plenty for this). Optional
 // claude-sonnet-4-6 and claude-opus-5 toggles. Opus 5 replaced opus-4-8 at
-// the same price per token, so the top slot got better for nothing. The fixed rules ride in the cached system block;
-// the live pantry + history + servings are the per-call user message.
+// the same price per token, so the top slot got better for nothing.
+//
+// The fixed rules ride in the cached system block; the live pantry + history
+// + servings are the per-call user message.
 //
 // The API key is entered once in Settings and stored encrypted on-device via
 // flutter_secure_storage — never hardcoded, never in the repo. Native apps
@@ -114,7 +117,13 @@ String? deviceNote(String name) {
 
 class ChefException implements Exception {
   final String message;
-  ChefException(this.message);
+
+  /// True when the call reached Claude and came back unreadable, rather than
+  /// failing for a reason a retry can't mend (a bad key, no network). A
+  /// formatting slip is usually transient, so those get one more go.
+  final bool unreadable;
+
+  ChefException(this.message, {this.unreadable = false});
   @override
   String toString() => message;
 }
@@ -760,7 +769,28 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   }
 
   // ── shared request ────────────────────────────────────────────────────
+  /// One call, with a single retry when the reply comes back unreadable.
+  ///
+  /// A model that answers in prose or fumbles its JSON almost always gets it
+  /// right the second time, and the alternative was a dead end: the cook is
+  /// told the reply was invalid and has to start over by hand. Only unreadable
+  /// replies are retried — a bad key or a dead connection is not worth a
+  /// second call.
   static Future<Map<String, dynamic>> _post({
+    required String user,
+    required int maxTokens,
+  }) async {
+    try {
+      return await _postOnce(user: user, maxTokens: maxTokens);
+    } on ChefException catch (e) {
+      if (!e.unreadable) {
+        rethrow;
+      }
+    }
+    return _postOnce(user: user, maxTokens: maxTokens);
+  }
+
+  static Future<Map<String, dynamic>> _postOnce({
     required String user,
     required int maxTokens,
   }) async {
@@ -821,7 +851,8 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
       if (e is ChefException) {
         rethrow;
       }
-      throw ChefException("Couldn't read the chef's reply — try again.");
+      throw ChefException("Couldn't read the chef's reply — try again.",
+          unreadable: true);
     }
   }
 
@@ -849,19 +880,99 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     }
   }
 
-  /// Pull the first JSON object out of the reply, tolerating stray markdown
-  /// fences or prose around it.
+  /// Test hook for [_extractJson]. Reading a model's reply is the one piece
+  /// of this file that can be checked without spending a call, and it is the
+  /// piece that failed in the field.
+  @visibleForTesting
+  static Map<String, dynamic> debugExtractJson(String text) =>
+      _extractJson(text);
+
+  /// Pull the JSON object out of the reply, tolerating markdown fences and
+  /// prose around it.
+  ///
+  /// The old version took everything between the first "{" and the last "}",
+  /// which breaks the moment a stray brace appears in prose before the JSON,
+  /// or the reply is two objects. It also gave the same message whether the
+  /// chef answered in words or returned broken JSON, so a report of it was
+  /// impossible to act on. Now it finds the first BALANCED object, and when
+  /// the chef answered in plain words it says so and quotes him.
   static Map<String, dynamic> _extractJson(String text) {
-    final int start = text.indexOf('{');
-    final int end = text.lastIndexOf('}');
-    if (start < 0 || end <= start) {
-      throw ChefException("The chef's reply wasn't valid — try again.");
+    final String s = _stripFences(text).trim();
+    final int start = s.indexOf('{');
+    if (start < 0) {
+      throw ChefException(_plainAnswer(s), unreadable: true);
     }
-    final dynamic d = jsonDecode(text.substring(start, end + 1));
-    if (d is Map<String, dynamic>) {
-      return d;
+    for (final String candidate in _jsonCandidates(s, start)) {
+      try {
+        final dynamic d = jsonDecode(candidate);
+        if (d is Map<String, dynamic>) {
+          return d;
+        }
+      } catch (_) {
+        // try the next shape
+      }
     }
-    throw ChefException("The chef's reply wasn't valid — try again.");
+    throw ChefException("The chef's reply came back garbled.", unreadable: true);
+  }
+
+  /// The balanced object starting at [start], then the greedy first-to-last
+  /// span as a fallback for a reply that is almost but not quite right.
+  static List<String> _jsonCandidates(String s, int start) {
+    final List<String> out = <String>[];
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (int i = start; i < s.length; i++) {
+      final String c = s[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (c == r'\') {
+          escaped = true;
+        } else if (c == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c == '"') {
+        inString = true;
+      } else if (c == '{') {
+        depth++;
+      } else if (c == '}') {
+        depth--;
+        if (depth == 0) {
+          out.add(s.substring(start, i + 1));
+          break;
+        }
+      }
+    }
+    final int last = s.lastIndexOf('}');
+    if (last > start) {
+      final String greedy = s.substring(start, last + 1);
+      if (!out.contains(greedy)) {
+        out.add(greedy);
+      }
+    }
+    return out;
+  }
+
+  /// Strip a ```json fence if the reply came wrapped in one.
+  static String _stripFences(String text) {
+    final RegExp fence = RegExp(r'```(?:json)?\s*([\s\S]*?)```', multiLine: true);
+    final RegExpMatch? m = fence.firstMatch(text);
+    return m != null ? (m.group(1) ?? text) : text;
+  }
+
+  /// The chef said something in words rather than handing back a dish. Quote
+  /// him: "I can't do that without X" is worth reading, and infinitely more
+  /// use than being told the reply was invalid.
+  static String _plainAnswer(String s) {
+    final String line = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (line.isEmpty) {
+      return 'The chef sent an empty reply. Try again.';
+    }
+    final String quote = line.length > 200 ? '${line.substring(0, 200)}…' : line;
+    return 'The chef answered in words instead of a dish: "$quote"';
   }
 
   /// One line per in-stock item for the prompt.
