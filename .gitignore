@@ -51,3 +51,8 @@ app.*.map.json
 **/*.jks
 **/*.keystore
 *.env
+
+# The iOS project is generated in CI by `flutter create --platforms=ios`
+# (see .github/workflows/ios.yml), never committed. If you run flutter create
+# locally, the result stays out of the repo.
+/ios/

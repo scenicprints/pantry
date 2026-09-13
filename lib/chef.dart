@@ -17,7 +17,8 @@ import 'pricebook.dart';
 //   Call 2  generateRecipe()  → the full grams-based recipe
 //
 // Model default: claude-haiku-4-5 (cheap, plenty for this). Optional
-// claude-sonnet-4-6 toggle. The fixed rules ride in the cached system block;
+// claude-sonnet-4-6 and claude-opus-5 toggles. Opus 5 replaced opus-4-8 at
+// the same price per token, so the top slot got better for nothing. The fixed rules ride in the cached system block;
 // the live pantry + history + servings are the per-call user message.
 //
 // The API key is entered once in Settings and stored encrypted on-device via
@@ -27,7 +28,7 @@ import 'pricebook.dart';
 
 const String kChefModelHaiku = 'claude-haiku-4-5';
 const String kChefModelSonnet = 'claude-sonnet-4-6';
-const String kChefModelOpus = 'claude-opus-4-8';
+const String kChefModelOpus = 'claude-opus-5';
 
 // ═══════════════════════════════════════════════════════════════════════
 // EQUIPMENT — what the user actually cooks with. The chef used to have this
@@ -522,8 +523,9 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
 Write the full recipe for "${option.title}" (${option.desc}) for $servings
-${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
-like eggs as counts). Cook Miracle Noodles IN the sauce if used. Include heat
+${servings == 1 ? 'person' : 'people'}. Measurements in GRAMS for anything
+weighed, counts for count items like eggs, spoons for spices, and "to taste"
+for salt and pepper. Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
 Keep it as simple as the dish honestly allows: as few steps and as few
 ingredients as the dish actually needs, and no technique a home cook on a
@@ -585,6 +587,162 @@ are numbers in dollars (e.g. 12.75).''';
 
     final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
     return Recipe.fromJson(data, baseServings: servings);
+  }
+
+  // ── cook it again, better ─────────────────────────────────────────────
+
+  /// Rewrite [recipe] applying what the cook wrote down after cooking it.
+  ///
+  /// The app remembers that a meal was cooked, never how it went, so the same
+  /// flaw came back every time. This is where a note turns into a change.
+  static Future<Recipe> reviseRecipe({
+    required Recipe recipe,
+    required List<String> notes,
+    required int servings,
+    required List<PantryItem> pantry,
+    PriceBook prices = const PriceBook(),
+  }) async {
+    final StringBuffer noteList = StringBuffer();
+    for (final String n in notes) {
+      noteList.writeln('- $n');
+    }
+    final String knownPrices = formatKnownPrices(prices, pantry);
+    final String equipment = formatEquipment(await ChefKeys.getEquipment());
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
+    final String servingWord = servings == 1 ? 'person' : 'people';
+
+    final String user = '''
+Rewrite this recipe for $servings $servingWord, applying what the cook wrote
+down after cooking it.
+
+It is the SAME DISH. Keep the title, keep the character of it. Change what the
+notes ask for, and anything that genuinely follows from that change: if a note
+says it was too salty, the salt drops AND anything salty that fed into it; if a
+note says a step ran long, that step's time and its timerSeconds both change.
+Change nothing the notes do not touch.
+
+WHAT THE COOK WROTE (oldest first, so the last line is the most recent):
+$noteList
+THE RECIPE AS IT STANDS (written for ${recipe.baseServings} ${recipe.baseServings == 1 ? 'person' : 'people'}):
+${jsonEncode(recipe.toJson())}
+
+PANTRY (what is on hand now; prices are per gram or per unit):
+${formatPantry(pantry)}
+${knownPrices.isEmpty ? '' : '''
+
+KNOWN PRICES (use these exact unit prices for these new buys):
+$knownPrices'''}
+$equipment
+$avoids
+Measurements in GRAMS for anything weighed, counts for count items like eggs,
+spoons for spices, and "to taste" for salt and pepper. Follow every user rule
+and the recipe format. Keep it as simple as the dish honestly allows.
+
+COST: estimate estCostTotal (whole recipe), estCostPerServing, and
+estGroceryCost (ONLY the new buys), in US dollars.
+
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"title":"","description":"","ingredients":[{"item":"","amount":""}],"steps":[{"title":"","content":"","timerSeconds":0}],"notes":"","estCostTotal":0,"estCostPerServing":0,"estGroceryCost":0}
+"notes" is one string containing protein per serving, calories per serving,
+saturated fat, added sugar and fiber per serving, any new buys, storage/pro
+tips, one short line on how the dish sits with the fatty liver, and one short
+line saying what you changed and why.''';
+
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    return Recipe.fromJson(data, baseServings: servings);
+  }
+
+  // ── mise en place ─────────────────────────────────────────────────────
+
+  /// Plan the measuring: which ingredients can share a bowl because they go
+  /// into the pan at the same moment and keep together until then.
+  ///
+  /// Deliberately a separate pass over a finished recipe rather than a field
+  /// on the generation, so anything already in the recipe box can get one.
+  static Future<PrepPlan> planPrep(Recipe recipe) async {
+    final StringBuffer ing = StringBuffer();
+    for (final RecipeIngredient i in recipe.ingredients) {
+      ing.writeln('- ${i.item}: ${i.amount}');
+    }
+    final StringBuffer steps = StringBuffer();
+    for (int i = 0; i < recipe.steps.length; i++) {
+      final RecipeStep st = recipe.steps[i];
+      steps.writeln(
+          '${i + 1}. ${st.title.isEmpty ? '' : '${st.title} — '}${st.content}');
+    }
+    final String servingWord =
+        recipe.baseServings == 1 ? 'serving' : 'servings';
+
+    final String user = '''
+Plan the mise en place for "${recipe.title}". The cook measures everything into
+bowls before starting.
+
+Two ingredients share a bowl ONLY when they go into the pan at the same moment
+AND sitting together until then harms neither.
+
+Never put in the same bowl:
+- raw meat, poultry, fish or raw egg with anything at all
+- salt or sugar with cut vegetables, or with anything that will weep
+- an acid (citrus, vinegar, wine, tomato) with dairy
+- baking soda or baking powder with any acid or any liquid
+- fresh soft herbs with anything hot or acidic
+- anything added to taste at the end, or any garnish
+
+Everything else that goes in together can share. An ingredient that shares with
+nothing still gets its own bowl: every ingredient below must appear exactly
+once across the bowls, none dropped, none repeated.
+
+Name each bowl for what it is ("Aromatics", "Tomato base", "Spice mix"), never
+"Bowl 1". Set "step" to the number of the step it goes into, or 0 if it is not
+tied to one. Copy each amount EXACTLY as written below. "prep" is the knife
+work if the ingredient list or a step calls for any ("diced", "thinly sliced"),
+otherwise an empty string.
+
+INGREDIENTS (for ${recipe.baseServings} $servingWord):
+$ing
+STEPS:
+$steps
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}]}''';
+
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2000);
+    return PrepPlan.fromJson(data, baseServings: recipe.baseServings);
+  }
+
+  // ── out of an ingredient ──────────────────────────────────────────────
+
+  /// A swap for [missing], preferring what the pantry already holds.
+  static Future<Substitution> substitute({
+    required Recipe recipe,
+    required RecipeIngredient missing,
+    required List<PantryItem> pantry,
+    required int servings,
+  }) async {
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
+    final double factor =
+        recipe.baseServings == 0 ? 1 : servings / recipe.baseServings;
+    final String servingWord = servings == 1 ? 'serving' : 'servings';
+    final String user = '''
+The cook is partway through "${recipe.title}" and has run out of
+"${missing.item}" (the recipe calls for ${missing.scaled(factor)}).
+
+Give ONE swap. Prefer something in the pantry below; only reach outside it if
+the pantry genuinely holds nothing that works. Give the amount for $servings
+$servingWord.
+
+"use" is what to use instead, with the amount.
+"fromPantry" is true ONLY if the swap is on the pantry list below.
+"note" is what changes about the dish and anything to do differently, at most
+two short sentences. Empty string if nothing changes.
+
+PANTRY:
+${formatPantry(pantry)}
+$avoids
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"use":"","note":"","fromPantry":false}''';
+
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 600);
+    return Substitution.fromJson(data);
   }
 
   // ── shared request ────────────────────────────────────────────────────
@@ -847,7 +1005,12 @@ USER PROFILE (hard rules — never violate):
   exercise. He notices the grocery bill, so don't be wasteful; but a dinner
   worth eating is worth paying the ordinary price for. Where cost and the liver
   rules pull against each other, the liver wins.
-- Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
+- Measurements: grams (never oz) for anything that gets weighed — proteins,
+  vegetables, grains, legumes, dairy, oil. Count items like eggs stay as counts.
+  Salt, pepper and dried spices do NOT go in grams; nobody weighs them. Use
+  teaspoons and tablespoons for spices, and "to taste" for salt and pepper. The
+  exception is where the amount genuinely has to be exact — a brine, a cure, or
+  anything baked — and there grams are right.
 
 FATTY LIVER RULES (hard rules — they outrank taste, cost and the pantry):
 Cooking for this liver is a Mediterranean pattern: vegetables and legumes in
@@ -1009,7 +1172,9 @@ ingredients proportionally and adjust servings. Note when air frying must be
 done in batches due to volume.
 
 RECIPE OUTPUT FORMAT:
-- All measurements in grams (counts for count items).
+- Grams for anything weighed, counts for count items, spoons for spices, and
+  "to taste" for salt and pepper. Never grams of salt, pepper or dried spice
+  outside a brine, a cure or a bake.
 - title -> description -> ingredients (with amounts) -> numbered steps (each
   with a short title) -> notes.
 - Notes: protein per serving, calories per serving, saturated fat per serving,

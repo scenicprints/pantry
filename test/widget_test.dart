@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:pantry/cook.dart';
 import 'package:pantry/main.dart';
 import 'package:pantry/models.dart';
 
@@ -31,11 +32,21 @@ PantryItem _weight({
       expirationDate: expiration,
     );
 
+/// Pump the app at a given logical screen size. The default test surface is
+/// 800x600, whose 600 shortest side sits exactly on the tablet threshold, so
+/// every shell test says which shape it means.
+Future<void> _pumpAt(WidgetTester tester, Size size) async {
+  GoogleFonts.config.allowRuntimeFetching = false; // no network in tests
+  tester.view.physicalSize = size;
+  tester.view.devicePixelRatio = 1.0;
+  addTearDown(tester.view.reset);
+  await tester.pumpWidget(const PantryApp());
+  await tester.pump();
+}
+
 void main() {
   testWidgets('App boots to the Pantry screen', (WidgetTester tester) async {
-    GoogleFonts.config.allowRuntimeFetching = false; // no network in tests
-    await tester.pumpWidget(const PantryApp());
-    await tester.pump();
+    await _pumpAt(tester, const Size(390, 844)); // phone
     expect(find.text('Pantry'), findsWidgets);
   });
 
@@ -59,6 +70,20 @@ void main() {
         name: 'Ground beef', serving: '100', servings: '4.8', available: '200');
     expect(saved.total, 480);
     expect(saved.remaining, 200);
+  });
+
+  testWidgets('Phone keeps the full tab bar', (WidgetTester tester) async {
+    await _pumpAt(tester, const Size(390, 844));
+    expect(find.text('Quick-Add'), findsWidgets);
+    expect(find.text('Cook'), findsWidgets);
+  });
+
+  testWidgets('Tablet is Cook only, no tab bar', (WidgetTester tester) async {
+    await _pumpAt(tester, const Size(834, 1194)); // iPad
+    // Quick-Add and the pantry list are phone work; the iPad is the counter.
+    expect(find.text('Quick-Add'), findsNothing);
+    expect(find.byType(NavigationBar), findsNothing);
+    expect(find.byType(CookTab), findsOneWidget);
   });
 
   test('price_per (weight) is price ÷ total grams', () {

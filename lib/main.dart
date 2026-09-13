@@ -631,10 +631,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           spending: _usage),
     ];
 
+    // The iPad is a cooking surface, not a second copy of the app. Pantry
+    // edits, Quick-Add and the shopping run all happen on the phone; here the
+    // whole screen belongs to Cook, with Settings one tap away so the chef
+    // model and the API key are still reachable.
+    final bool tablet = MediaQuery.sizeOf(context).shortestSide >= 600;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: kBg,
         elevation: 0,
+        actions: <Widget>[
+          if (tablet)
+            IconButton(
+              tooltip: 'Settings',
+              onPressed: () => _openSettings(visibleItems.length),
+              icon: const Icon(Icons.settings_rounded, color: kInk),
+            ),
+        ],
         title: Row(children: [
           const Icon(Icons.kitchen_rounded, color: kAccent, size: 22),
           const SizedBox(width: 8),
@@ -666,7 +680,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       // FAB lives on the OUTER Scaffold so it is positioned above the bottom
       // NavigationBar (fixes the nav-bar overlap). Only shown on the Pantry tab.
-      floatingActionButton: _tab == 0
+      floatingActionButton: (!tablet && _tab == 0)
           ? FloatingActionButton.extended(
               backgroundColor: kAccent,
               foregroundColor: Colors.white,
@@ -676,23 +690,49 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   style: TextStyle(fontWeight: FontWeight.w700)),
             )
           : null,
-      body: IndexedStack(index: _tab, children: pages),
-      bottomNavigationBar: NavigationBar(
-        backgroundColor: kCard,
-        indicatorColor: kAccent.withValues(alpha: 0.18),
-        selectedIndex: _tab,
-        onDestinationSelected: (int i) => setState(() => _tab = i),
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-              icon: Icon(Icons.list_alt_rounded), label: 'Pantry'),
-          NavigationDestination(
-              icon: Icon(Icons.restaurant_menu_rounded), label: 'Cook'),
-          NavigationDestination(icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
-          NavigationDestination(
-              icon: Icon(Icons.settings_rounded), label: 'Settings'),
-        ],
-      ),
+      body: tablet
+          ? CookTab(
+              items: visibleItems, prices: _prices, spending: _usage)
+          : readableColumn(IndexedStack(index: _tab, children: pages)),
+      bottomNavigationBar: tablet
+          ? null
+          : NavigationBar(
+              backgroundColor: kCard,
+              indicatorColor: kAccent.withValues(alpha: 0.18),
+              selectedIndex: _tab,
+              onDestinationSelected: (int i) => setState(() => _tab = i),
+              destinations: const <NavigationDestination>[
+                NavigationDestination(
+                    icon: Icon(Icons.list_alt_rounded), label: 'Pantry'),
+                NavigationDestination(
+                    icon: Icon(Icons.restaurant_menu_rounded), label: 'Cook'),
+                NavigationDestination(
+                    icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
+                NavigationDestination(
+                    icon: Icon(Icons.settings_rounded), label: 'Settings'),
+              ],
+            ),
     );
+  }
+
+  /// Settings as a pushed page, for the tablet where there is no nav bar.
+  void _openSettings(int itemCount) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Scaffold(
+        appBar: AppBar(
+            backgroundColor: kBg,
+            elevation: 0,
+            title: const Text('Settings',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700, letterSpacing: 0.3))),
+        body: readableColumn(SettingsTab(
+          syncing: _syncing,
+          onSyncNow: _syncFromRemote,
+          itemCount: itemCount,
+          spending: _usage,
+        )),
+      ),
+    ));
   }
 
   void _openItem(PantryItem item) {

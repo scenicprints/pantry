@@ -5,6 +5,11 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 // finishes, so it's heard from across the kitchen (not just a silent buzz).
 // Uses immediate .show() fired by the in-app countdown (no scheduling), so
 // no exact-alarm / timezone setup is needed.
+//
+// iOS/iPadOS takes the same calls through the Darwin settings below. It has no
+// notification channels and no full-screen intent, so the alarm there is a
+// banner + sound; the in-app countdown, the buzz and the wakelock carry the
+// rest. Permission is asked at init on iOS (Android 13+ asks separately).
 // ═══════════════════════════════════════════════════════════════════════
 
 class Notifications {
@@ -28,8 +33,13 @@ class Notifications {
     try {
       const AndroidInitializationSettings android =
           AndroidInitializationSettings('@mipmap/ic_launcher');
+      const DarwinInitializationSettings darwin = DarwinInitializationSettings(
+        requestAlertPermission: true,
+        requestBadgePermission: false,
+        requestSoundPermission: true,
+      );
       await _p.initialize(
-          const InitializationSettings(android: android));
+          const InitializationSettings(android: android, iOS: darwin));
       await _p
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
@@ -38,8 +48,9 @@ class Notifications {
     } catch (_) {}
   }
 
-  /// Ask for the POST_NOTIFICATIONS permission (Android 13+). Safe to call
-  /// repeatedly; no-op if already granted or on older Android.
+  /// Ask for notification permission — POST_NOTIFICATIONS on Android 13+,
+  /// the alert/sound prompt on iOS. Safe to call repeatedly; no-op if already
+  /// granted or on older Android.
   static Future<void> requestPermission() async {
     try {
       await init();
@@ -47,6 +58,10 @@ class Notifications {
           .resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>()
           ?.requestNotificationsPermission();
+      await _p
+          .resolvePlatformSpecificImplementation<
+              IOSFlutterLocalNotificationsPlugin>()
+          ?.requestPermissions(alert: true, sound: true);
     } catch (_) {}
   }
 
@@ -64,6 +79,13 @@ class Notifications {
           enableVibration: true,
           category: AndroidNotificationCategory.alarm,
           fullScreenIntent: true,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentSound: true,
+          // Not timeSensitive: that level needs a signed entitlement on the
+          // App ID. Raise it later if the kitchen timer is too quiet.
+          interruptionLevel: InterruptionLevel.active,
         ),
       );
       await _p.show(

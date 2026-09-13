@@ -601,8 +601,11 @@ double _num(dynamic v) {
 }
 
 /// Scale the leading number in an amount string, keeping the unit text.
-/// Weight/volume (g, ml, tbsp…) round to whole; count-like (eggs, cloves)
-/// round to the nearest half so you don't get "0.37 egg".
+///
+/// Three kinds of amount round differently, because three different things
+/// measure them. Weights and volumes come off a scale or a jug, so they go to
+/// whole units. Spoons exist in quarters. Counts go to halves, so you never
+/// get "0.37 egg".
 String _scaleAmount(String amount, double factor) {
   final RegExpMatch? m = RegExp(r'^\s*(\d+(?:\.\d+)?)').firstMatch(amount);
   if (m == null) {
@@ -612,14 +615,152 @@ String _scaleAmount(String amount, double factor) {
   final String rest = amount.substring(m.end); // unit + any extra text
   final double v = base * factor;
   final String unit = rest.toLowerCase();
-  final bool weightOrVolume = RegExp(
-          r'\b(g|kg|ml|l|gram|tbsp|tsp|cup|oz)\b|^\s*g\b|^\s*ml\b')
-      .hasMatch(unit);
-  final double rounded = weightOrVolume
-      ? v.roundToDouble()
-      : (v * 2).roundToDouble() / 2; // nearest 0.5 for counts
-  final String num = rounded == rounded.roundToDouble()
-      ? rounded.toInt().toString()
-      : rounded.toStringAsFixed(1);
+  final bool weighed =
+      RegExp(r'\b(g|kg|ml|l|gram|oz)\b|^\s*g\b|^\s*ml\b').hasMatch(unit);
+  final bool spooned =
+      RegExp(r'\b(tbsp|tsp|cup|tablespoon|teaspoon)\b').hasMatch(unit);
+  final double step = weighed ? 1 : (spooned ? 0.25 : 0.5);
+  double rounded = (v / step).roundToDouble() * step;
+  // Scaling a real amount down must never round it away to nothing.
+  if (rounded <= 0 && v > 0) {
+    rounded = step;
+  }
+  // Two decimals then trim, so a quarter spoon reads "0.25" and a whole
+  // weight reads "170", not "170.0".
+  String num = rounded.toStringAsFixed(2).replaceFirst(RegExp(r'\.?0+$'), '');
+  if (num.isEmpty) {
+    num = '0';
+  }
   return '$num$rest';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// MISE EN PLACE — the measuring plan. Ingredients that go into the pot at
+// the same moment, and are safe to sit together beforehand, share a bowl.
+// The chef decides the grouping; it is a judgement call, not something you
+// can read off the step text (salt draws water out of cut vegetables, acid
+// splits dairy, raw meat touches nothing).
+//
+// Amounts are stored at the recipe's base servings and scaled for display,
+// exactly like RecipeIngredient, so one cached plan serves every size.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// One thing to measure into a bowl. [prep] is the knife work if any
+/// ("diced", "roughly chopped"), empty when it goes in as-is.
+class PrepItem {
+  final String item;
+  final String amount;
+  final String prep;
+  const PrepItem({required this.item, required this.amount, this.prep = ''});
+
+  factory PrepItem.fromJson(Map<String, dynamic> j) => PrepItem(
+        item: (j['item'] as String?)?.trim() ?? '',
+        amount: (j['amount'] as String?)?.trim() ?? '',
+        prep: (j['prep'] as String?)?.trim() ?? '',
+      );
+
+  Map<String, dynamic> toJson() =>
+      <String, dynamic>{'item': item, 'amount': amount, 'prep': prep};
+
+  String scaled(double factor) => _scaleAmount(amount, factor);
+}
+
+/// One bowl. [step] is the 1-based step it goes into (0 when the chef
+/// didn't tie it to one).
+class PrepBowl {
+  final String label;
+  final int step;
+  final List<PrepItem> items;
+  const PrepBowl({
+    required this.label,
+    required this.items,
+    this.step = 0,
+  });
+
+  factory PrepBowl.fromJson(Map<String, dynamic> j) => PrepBowl(
+        label: (j['label'] as String?)?.trim() ?? '',
+        step: (j['step'] as num?)?.round() ?? 0,
+        items: ((j['items'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(PrepItem.fromJson)
+            .where((PrepItem i) => i.item.isNotEmpty)
+            .toList(),
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'label': label,
+        'step': step,
+        'items': items.map((PrepItem i) => i.toJson()).toList(),
+      };
+}
+
+/// A whole measuring plan for one recipe.
+class PrepPlan {
+  final List<PrepBowl> bowls;
+  final int baseServings;
+  const PrepPlan({required this.bowls, required this.baseServings});
+
+  bool get isEmpty => bowls.isEmpty;
+
+  /// Every item across every bowl, in display order. The checklist indexes
+  /// into this, so bowl order and item order are the identity of a tick.
+  int get itemCount =>
+      bowls.fold(0, (int n, PrepBowl b) => n + b.items.length);
+
+  factory PrepPlan.fromJson(Map<String, dynamic> j, {required int baseServings}) =>
+      PrepPlan(
+        baseServings: (j['baseServings'] as num?)?.round() ?? baseServings,
+        bowls: ((j['bowls'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(PrepBowl.fromJson)
+            .where((PrepBowl b) => b.items.isNotEmpty)
+            .toList(),
+      );
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'baseServings': baseServings,
+        'bowls': bowls.map((PrepBowl b) => b.toJson()).toList(),
+      };
+
+  String encode() => jsonEncode(toJson());
+
+  static PrepPlan? decode(String? s, {required int baseServings}) {
+    if (s == null || s.trim().isEmpty) {
+      return null;
+    }
+    try {
+      final dynamic d = jsonDecode(s);
+      if (d is Map<String, dynamic>) {
+        return PrepPlan.fromJson(d, baseServings: baseServings);
+      }
+    } catch (_) {}
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// SUBSTITUTION — "I'm out of this", answered mid-cook against the pantry.
+// ═══════════════════════════════════════════════════════════════════════
+
+class Substitution {
+  /// What to use instead, as a measured amount at the servings asked for.
+  final String use;
+
+  /// How the dish changes and anything to do differently. One or two lines.
+  final String note;
+
+  /// True when the swap comes from what the pantry already holds.
+  final bool fromPantry;
+
+  const Substitution({
+    required this.use,
+    required this.note,
+    required this.fromPantry,
+  });
+
+  factory Substitution.fromJson(Map<String, dynamic> j) => Substitution(
+        use: (j['use'] as String?)?.trim() ?? '',
+        note: (j['note'] as String?)?.trim() ?? '',
+        fromPantry: (j['fromPantry'] as bool?) ?? false,
+      );
 }

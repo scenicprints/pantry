@@ -1,0 +1,265 @@
+name: Build & Ship iOS (TestFlight)
+
+# Builds Pantry for iPhone/iPad on a cloud macOS runner and uploads it to
+# TestFlight, signed with an App Store Connect API key. No Mac needed locally.
+#
+# The ios/ folder is NOT in the repo. It is generated here on every run by
+# `flutter create --platforms=ios`, then patched by the steps below. That keeps
+# a ~100-file Xcode project we cannot build or test on Windows out of the repo,
+# and makes the iOS config one readable file instead of a buried pbxproj.
+#
+# Repo secrets required (the same Apple values the Marquee TV app already uses
+# in scenicprints/mediaserver, they are account-wide not per-app):
+#   APPLE_TEAM_ID      - 10-char team id
+#   ASC_KEY_ID         - App Store Connect API key id
+#   ASC_ISSUER_ID      - App Store Connect API issuer id
+#   ASC_KEY_P8_BASE64  - the AuthKey_XXXX.p8 file, base64-encoded
+# Plus the three the Android release already uses, which is what makes the iPad
+# talk to the same pantry.json as the phone:
+#   PANTRY_DATA_TOKEN, ANTHROPIC_API_KEY, USDA_API_KEY
+#
+# Manual only. Pushing code never ships to TestFlight on its own.
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Upload to TestFlight (uncheck for a build-only check)'
+        type: boolean
+        default: true
+  schedule:
+    # TestFlight builds expire after 90 days. Rebuild every 2 months so the
+    # copy on the iPad never lapses.
+    - cron: '0 9 1 */2 *'
+
+env:
+  FLUTTER_VERSION: '3.44.2'
+  IOS_DEPLOYMENT_TARGET: '15.5'
+
+jobs:
+  testflight:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Let scheduled runs stay green before the Apple secrets are added.
+      - name: Preflight, check signing secrets
+        id: pre
+        run: |
+          if [ -z "${{ secrets.ASC_KEY_ID }}" ] || [ -z "${{ secrets.APPLE_TEAM_ID }}" ]; then
+            echo "::notice::Apple signing secrets not set yet, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Select newest Xcode
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          XC="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Using $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+
+      - name: Set up Flutter
+        if: steps.pre.outputs.skip != 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        if: steps.pre.outputs.skip != 'true'
+        run: flutter pub get
+
+      # Generates ios/ with bundle id com.scenicprints.pantry. flutter create
+      # only fills in what is missing, but restore tracked files anyway so the
+      # Dart that ships is exactly the Dart in the repo. ios/ is untracked, so
+      # the restore leaves it alone.
+      - name: Generate the iOS project
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          flutter create --platforms=ios --org com.scenicprints --project-name pantry .
+          git checkout -- .
+          test -d ios/Runner.xcodeproj
+
+      # Written out rather than patched: ML Kit needs a 15.5 floor and the
+      # 32-bit archs excluded, and the generated Podfile has neither.
+      - name: Write the Podfile
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          cat > ios/Podfile <<'RUBY'
+          platform :ios, '15.5'
+
+          ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+          project 'Runner', {
+            'Debug' => :debug,
+            'Profile' => :release,
+            'Release' => :release,
+          }
+
+          def flutter_root
+            generated = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+            unless File.exist?(generated)
+              raise "#{generated} must exist. Run flutter pub get first."
+            end
+            File.foreach(generated) do |line|
+              matches = line.match(/FLUTTER_ROOT\=(.*)/)
+              return matches[1].strip if matches
+            end
+            raise "FLUTTER_ROOT not found in #{generated}."
+          end
+
+          require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+          flutter_ios_podfile_setup
+
+          target 'Runner' do
+            use_frameworks!
+            use_modular_headers!
+            flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+          end
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              flutter_additional_ios_build_settings(target)
+              target.build_configurations.each do |config|
+                # ML Kit: 15.5 floor, and it ships no 32-bit slices.
+                config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '15.5'
+                config.build_settings['EXCLUDED_ARCHS[sdk=iphoneos*]'] = 'armv7'
+                config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = 'i386'
+              end
+            end
+          end
+          RUBY
+          cat ios/Podfile
+
+      - name: Raise the deployment target
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          T="${{ env.IOS_DEPLOYMENT_TARGET }}"
+          sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = $T;/g" \
+            ios/Runner.xcodeproj/project.pbxproj
+          /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $T" ios/Flutter/AppFrameworkInfo.plist
+          grep -q "IPHONEOS_DEPLOYMENT_TARGET = $T;" ios/Runner.xcodeproj/project.pbxproj
+
+      # Camera and photo strings are required or the app dies the moment the
+      # scanner opens, and Apple rejects a build without them.
+      - name: Patch Info.plist
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          set -e
+          P=ios/Runner/Info.plist
+          /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Pantry" "$P" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Pantry" "$P"
+          /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Pantry uses the camera to scan barcodes and read nutrition labels." "$P" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string Pantry reads a nutrition label from a photo you pick." "$P" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :ITSAppUsesNonExemptEncryption bool false" "$P" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Print" "$P"
+
+      - name: Generate the app icon
+        if: steps.pre.outputs.skip != 'true'
+        run: dart run flutter_launcher_icons
+
+      # Apple needs a build number that only ever climbs for a given version
+      # string. run_number is monotonic; the offset clears the 29 builds the
+      # Android side already spent on this version.
+      - name: Pick the build number
+        if: steps.pre.outputs.skip != 'true'
+        run: echo "BUILD_NUMBER=$(( ${{ github.run_number }} + 200 ))" >> "$GITHUB_ENV"
+
+      # The dart-defines are what make the iPad the same app as the phone: the
+      # same write token onto the same pantry.json, the same chef key.
+      - name: Build (unsigned)
+        if: steps.pre.outputs.skip != 'true'
+        env:
+          GITHUB_DATA_TOKEN: ${{ secrets.PANTRY_DATA_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          USDA_API_KEY: ${{ secrets.USDA_API_KEY }}
+        run: |
+          flutter build ios --release --no-codesign \
+            --build-number="$BUILD_NUMBER" \
+            --dart-define=GITHUB_DATA_TOKEN=$GITHUB_DATA_TOKEN \
+            --dart-define=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+            --dart-define=USDA_API_KEY=$USDA_API_KEY
+
+      - name: Write App Store Connect API key
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          KEYDIR="$HOME/.appstoreconnect/private_keys"
+          mkdir -p "$KEYDIR"
+          echo "${{ secrets.ASC_KEY_P8_BASE64 }}" | base64 --decode > "$KEYDIR/AuthKey_${{ secrets.ASC_KEY_ID }}.p8"
+
+      # Archive unsigned, sign only at export. A Development profile would want
+      # a registered device; an App Store profile does not (same lesson as the
+      # Marquee TV pipeline). The Flutter build phase re-runs here and picks the
+      # dart-defines back up out of ios/Flutter/Generated.xcconfig.
+      - name: Archive
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          xcodebuild \
+            -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -sdk iphoneos \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$PWD/build/Pantry.xcarchive" \
+            DEVELOPMENT_TEAM="${{ secrets.APPLE_TEAM_ID }}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            archive
+
+      - name: Export .ipa
+        if: steps.pre.outputs.skip != 'true'
+        run: |
+          cat > ExportOptions.plist <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store</string>
+            <key>teamID</key><string>APPLE_TEAM_ID_HERE</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>uploadSymbols</key><true/>
+          </dict></plist>
+          PLIST
+          sed -i '' "s/APPLE_TEAM_ID_HERE/${{ secrets.APPLE_TEAM_ID }}/" ExportOptions.plist
+          xcodebuild -exportArchive \
+            -archivePath "$PWD/build/Pantry.xcarchive" \
+            -exportPath "$PWD/build/export" \
+            -exportOptionsPlist ExportOptions.plist \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$HOME/.appstoreconnect/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8" \
+            -authenticationKeyID "${{ secrets.ASC_KEY_ID }}" \
+            -authenticationKeyIssuerID "${{ secrets.ASC_ISSUER_ID }}"
+          ls -la "$PWD/build/export"
+
+      - name: Keep the .ipa
+        if: steps.pre.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pantry-ipa
+          path: build/export/*.ipa
+          if-no-files-found: error
+
+      - name: Upload to TestFlight
+        if: steps.pre.outputs.skip != 'true' && inputs.upload != false
+        run: |
+          # altool prints "UPLOAD FAILED" but exits 0 on some validation errors
+          # (the daily upload limit, for one), which once faked a successful
+          # ship. Read its output and fail the step here instead.
+          set -o pipefail
+          IPA="$(ls "$PWD"/build/export/*.ipa | head -1)"
+          out=$(xcrun altool --upload-app -t ios \
+            -f "$IPA" \
+            --apiKey "${{ secrets.ASC_KEY_ID }}" \
+            --apiIssuer "${{ secrets.ASC_ISSUER_ID }}" 2>&1) || true
+          echo "$out"
+          if echo "$out" | grep -qiE 'UPLOAD FAILED|ERROR:|Validation failed'; then
+            echo "::error::TestFlight upload failed (see log above)."
+            exit 1
+          fi
+          echo "$out" | grep -qi 'No errors uploading' || {
+            echo "::error::altool did not confirm a successful upload."; exit 1; }
+          echo "::notice::Build $BUILD_NUMBER uploaded. It shows up in TestFlight once Apple finishes processing, about 10 minutes."
