@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'chef_sync.dart';
 import 'cook.dart';
 import 'food_lookup.dart';
 import 'github_sync.dart';
@@ -83,6 +84,13 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .withPantry(_items, DateTime.now());
     LocalCache.savePriceBook(_prices.encode());
     _syncFromRemote();
+    // The chef's settings live on GitHub too, so the iPad cooks with the same
+    // equipment and the same avoid list as the phone.
+    ChefSync.pull().then((bool changed) {
+      if (changed && mounted) {
+        setState(() {});
+      }
+    }).catchError((Object _) => false);
   }
 
   @override

@@ -5,6 +5,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'chef.dart';
 import 'chef_models.dart';
+import 'chef_sync.dart';
 import 'cook_timers.dart';
 import 'cooked_handoff.dart';
 import 'liver.dart';
@@ -670,6 +671,7 @@ Future<String?> confirmCooked(BuildContext context, String title) async {
     return null;
   }
   LocalCache.addNote(title, result);
+  ChefSync.pushSoon();
   return result;
 }
 
@@ -1750,6 +1752,7 @@ class _RecipeScreenState extends State<RecipeScreen> {
                     borderRadius: BorderRadius.circular(6),
                     onTap: () {
                       LocalCache.removeNote(widget.recipe.title, i);
+                      ChefSync.pushSoon();
                       setState(() {});
                     },
                     child: const Padding(
@@ -1831,6 +1834,7 @@ class _RecipeScreenState extends State<RecipeScreen> {
       return;
     }
     LocalCache.addNote(widget.recipe.title, note);
+    ChefSync.pushSoon();
     if (!mounted) {
       return;
     }
@@ -2575,6 +2579,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
           : <String>[..._equipment, name];
     });
     ChefKeys.setEquipment(_equipment);
+    ChefSync.pushSoon();
   }
 
   Future<void> _addCustomDevice() async {
@@ -2618,6 +2623,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     }
     setState(() => _equipment = <String>[..._equipment, name]);
     ChefKeys.setEquipment(_equipment);
+    ChefSync.pushSoon();
   }
 
   // ── avoid list ────────────────────────────────────────────────────────
@@ -2663,11 +2669,13 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     }
     setState(() => _avoids = <String>[..._avoids, name]);
     ChefKeys.setAvoids(_avoids);
+    ChefSync.pushSoon();
   }
 
   void _removeAvoid(String name) {
     setState(() => _avoids = _avoids.where((String s) => s != name).toList());
     ChefKeys.setAvoids(_avoids);
+    ChefSync.pushSoon();
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text('No longer avoiding $name.')));
   }
@@ -2676,6 +2684,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
     setState(() =>
         _equipment = _equipment.where((String s) => s != name).toList());
     ChefKeys.setEquipment(_equipment);
+    ChefSync.pushSoon();
     ScaffoldMessenger.of(context)
         .showSnackBar(SnackBar(content: Text('Removed $name.')));
   }
@@ -2794,6 +2803,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
           onSelectionChanged: (Set<String> s) {
             setState(() => _model = s.first);
             ChefKeys.setModelPref(s.first);
+            ChefSync.pushSoon();
           },
           style: ButtonStyle(
             backgroundColor: WidgetStateProperty.resolveWith((Set<WidgetState> st) =>

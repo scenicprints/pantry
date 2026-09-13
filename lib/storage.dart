@@ -84,8 +84,22 @@ class LocalCache {
     return v is bool ? v : fallback;
   }
 
+  static int prefInt(String key, {int fallback = 0}) {
+    final dynamic v = _prefs[key];
+    return v is int ? v : (v is num ? v.round() : fallback);
+  }
+
+  static void setPrefInt(String key, int value) {
+    _prefs[key] = value;
+    _writePrefs();
+  }
+
   static void setPrefBool(String key, bool value) {
     _prefs[key] = value;
+    _writePrefs();
+  }
+
+  static void _writePrefs() {
     try {
       _prefsFile.writeAsStringSync(jsonEncode(_prefs));
     } catch (_) {}
@@ -148,6 +162,28 @@ class LocalCache {
     }
     notes.removeAt(index);
     _writeNotes(title, notes);
+  }
+
+  /// Every recipe's notes, for the cross-device chef profile.
+  static Map<String, List<String>> allNotes() {
+    final Map<String, List<String>> out = <String, List<String>>{};
+    _cookNotes.forEach((String k, dynamic v) {
+      if (v is List) {
+        final List<String> notes = v.whereType<String>().toList();
+        if (notes.isNotEmpty) {
+          out[k] = notes;
+        }
+      }
+    });
+    return out;
+  }
+
+  /// Replace the lot, when a newer profile arrives from the other device.
+  static void replaceNotes(Map<String, List<String>> notes) {
+    _cookNotes = <String, dynamic>{...notes};
+    try {
+      _notesFile.writeAsStringSync(jsonEncode(_cookNotes));
+    } catch (_) {}
   }
 
   static void _writeNotes(String title, List<String> notes) {

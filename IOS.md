@@ -85,6 +85,16 @@ fails the step itself.
 - **"I'm out of this."** Tap an ingredient, on the recipe or in cooking mode,
   and the chef proposes a swap from what the pantry actually holds.
 - **Opus 5** replaced Opus 4.8 in the model picker, same price per token.
+- **One chef on every device.** The model, equipment list, avoid list and cook
+  notes ride in `chef.json` beside `pantry.json`, so the iPad cooks with the
+  same kitchen and the same avoid list as the phone. They used to live in
+  per-device secure storage, which meant a fresh install started with an empty
+  avoid list while the prompt was still told to respect it. The API key never
+  goes in that file; the repo is public.
+- **Measured weights go to BodyComp.** The Measure screen captures what really
+  went in the pan, links each line to a pantry item, and "Done, send to
+  BodyComp" writes `cooked.json`, then takes the raw grams off the shelf.
+  BodyComp logs it and does not subtract again.
 - **Cook notes that change the recipe.** Marking a meal cooked asks one
   optional line: too salty, wanted five more minutes. It shows on the recipe
   next time, and "Cook it again, fixed" hands the notes to the chef, which
