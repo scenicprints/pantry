@@ -911,15 +911,16 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   /// which breaks the moment a stray brace appears in prose before the JSON,
   /// or the reply is two objects. It also gave the same message whether the
   /// chef answered in words or returned broken JSON, so a report of it was
-  /// impossible to act on. Now it finds the first BALANCED object, and when
-  /// the chef answered in plain words it says so and quotes him.
+  /// impossible to act on. Now it tries the BALANCED object at every brace
+  /// in turn and keeps the first that decodes to an object, so a "{curly}" in
+  /// the prose no longer hides the real reply. When the chef answered in
+  /// plain words it says so and quotes him.
   static Map<String, dynamic> _extractJson(String text) {
     final String s = _stripFences(text).trim();
-    final int start = s.indexOf('{');
-    if (start < 0) {
+    if (!s.contains('{')) {
       throw ChefException(_plainAnswer(s), unreadable: true);
     }
-    for (final String candidate in _jsonCandidates(s, start)) {
+    for (final String candidate in _jsonCandidates(s)) {
       try {
         final dynamic d = jsonDecode(candidate);
         if (d is Map<String, dynamic>) {
@@ -932,10 +933,41 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     throw ChefException("The chef's reply came back garbled.", unreadable: true);
   }
 
-  /// The balanced object starting at [start], then the greedy first-to-last
-  /// span as a fallback for a reply that is almost but not quite right.
-  static List<String> _jsonCandidates(String s, int start) {
+  /// Every balanced object in the reply, in order, then the greedy
+  /// first-to-last span as a last resort.
+  ///
+  /// Each brace gets its own attempt because the first one is not always the
+  /// real one: a reply opening with "Note: use {curly} quotes." would
+  /// otherwise hide the JSON that follows it. Capped, so a pathological reply
+  /// can't turn this quadratic.
+  static List<String> _jsonCandidates(String s) {
+    const int maxTries = 24;
     final List<String> out = <String>[];
+    int tries = 0;
+    for (int i = 0; i < s.length && tries < maxTries; i++) {
+      if (s[i] != '{') {
+        continue;
+      }
+      tries++;
+      final String? obj = _balancedFrom(s, i);
+      if (obj != null && !out.contains(obj)) {
+        out.add(obj);
+      }
+    }
+    final int first = s.indexOf('{');
+    final int last = s.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      final String greedy = s.substring(first, last + 1);
+      if (!out.contains(greedy)) {
+        out.add(greedy);
+      }
+    }
+    return out;
+  }
+
+  /// The balanced object beginning at [start], or null if it never closes.
+  /// String-aware, so a brace or a quote inside a description is just text.
+  static String? _balancedFrom(String s, int start) {
     int depth = 0;
     bool inString = false;
     bool escaped = false;
@@ -958,19 +990,11 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
       } else if (c == '}') {
         depth--;
         if (depth == 0) {
-          out.add(s.substring(start, i + 1));
-          break;
+          return s.substring(start, i + 1);
         }
       }
     }
-    final int last = s.lastIndexOf('}');
-    if (last > start) {
-      final String greedy = s.substring(start, last + 1);
-      if (!out.contains(greedy)) {
-        out.add(greedy);
-      }
-    }
-    return out;
+    return null;
   }
 
   /// Strip a ```json fence if the reply came wrapped in one.
