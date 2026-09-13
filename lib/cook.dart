@@ -2371,7 +2371,7 @@ class TimerRail extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             itemCount: timers.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
             itemBuilder: (_, int i) => _chip(timers[i]),
           ),
         );

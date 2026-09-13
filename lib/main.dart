@@ -90,7 +90,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (changed && mounted) {
         setState(() {});
       }
-    }).catchError((Object _) => false);
+    }).catchError((Object _) {});
   }
 
   @override
