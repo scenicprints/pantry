@@ -800,9 +800,20 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     }
     final String model = await ChefKeys.getModelId();
 
+    // Opus 5 THINKS BY DEFAULT; opus-4-8, which it replaced, did not. Thinking
+    // tokens are spent out of max_tokens, so a budget that comfortably held
+    // five options before now has to cover the reasoning as well — and when it
+    // runs out, the JSON is truncated mid-object and the reply is unreadable.
+    //
+    // Every call here wants a filled-in JSON shape, not a hard think, so ask
+    // for low effort rather than switching thinking off: disabling it on Opus 5
+    // has its own failure modes (stray tags leaking into the text). Then give
+    // the budget and the clock room for whatever thinking still happens.
+    final bool thinks = _thinksByDefault(model);
     final Map<String, dynamic> body = <String, dynamic>{
       'model': model,
-      'max_tokens': maxTokens,
+      'max_tokens': thinks ? maxTokens * 3 : maxTokens,
+      if (thinks) 'output_config': <String, dynamic>{'effort': 'low'},
       // Fixed rules ride in a cached system block; only the user turn varies.
       'system': <Map<String, dynamic>>[
         <String, dynamic>{
@@ -828,7 +839,7 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
             },
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 60));
+          .timeout(Duration(seconds: thinks ? 150 : 60));
     } catch (_) {
       throw ChefException('Network error — check your connection and retry.');
     }
@@ -879,6 +890,12 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
         return 'Request failed (${resp.statusCode})${detail.isEmpty ? '' : ': $detail'}';
     }
   }
+
+  /// Models that reason before answering unless told otherwise. Opus 5 and
+  /// Sonnet 5 do; the 4.x models this app used before did not, which is why
+  /// the token budgets here were sized without it.
+  static bool _thinksByDefault(String model) =>
+      model.startsWith('claude-opus-5') || model.startsWith('claude-sonnet-5');
 
   /// Test hook for [_extractJson]. Reading a model's reply is the one piece
   /// of this file that can be checked without spending a call, and it is the
