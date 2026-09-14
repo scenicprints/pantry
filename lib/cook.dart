@@ -2081,7 +2081,8 @@ class CookingModeScreen extends StatefulWidget {
   State<CookingModeScreen> createState() => _CookingModeScreenState();
 }
 
-class _CookingModeScreenState extends State<CookingModeScreen> {
+class _CookingModeScreenState extends State<CookingModeScreen>
+    with WidgetsBindingObserver, KeepScreenAwake<CookingModeScreen> {
   final PageController _pc = PageController();
   int _page = 0;
   late bool _twoPane = LocalCache.prefBool(kPrefTwoPane, fallback: true);
@@ -2101,7 +2102,7 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
   @override
   void initState() {
     super.initState();
-    WakelockPlus.enable();
+    startKeepingAwake();
     Notifications.requestPermission();
     // Anything left over from an earlier dish would sit in the rail lying
     // about what is on the stove.
@@ -2110,7 +2111,7 @@ class _CookingModeScreenState extends State<CookingModeScreen> {
 
   @override
   void dispose() {
-    WakelockPlus.disable();
+    stopKeepingAwake();
     _pc.dispose();
     super.dispose();
   }
@@ -3221,6 +3222,44 @@ Future<T?> withSpinner<T>(
 // should not be told he can't.
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Keeps the screen lit for as long as the state is mounted.
+///
+/// iOS clears the idle-timer flag whenever the app leaves the foreground, so
+/// enabling it once on the way in is not enough: glance at a message, come
+/// back, and the iPad starts counting down to sleep again with your hands
+/// covered in flour. This re-asserts it every time the app returns.
+mixin KeepScreenAwake<T extends StatefulWidget> on State<T>
+    implements WidgetsBindingObserver {
+  void _awake(bool on) {
+    try {
+      if (on) {
+        WakelockPlus.enable();
+      } else {
+        WakelockPlus.disable();
+      }
+    } catch (_) {
+      // No wakelock here; the cook just has to tap the screen.
+    }
+  }
+
+  void startKeepingAwake() {
+    WidgetsBinding.instance.addObserver(this);
+    _awake(true);
+  }
+
+  void stopKeepingAwake() {
+    WidgetsBinding.instance.removeObserver(this);
+    _awake(false);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && mounted) {
+      _awake(true);
+    }
+  }
+}
+
 /// One ingredient: what it is, where it comes from, and what you weighed.
 /// Shared by the measuring screen and the weights panel in cooking mode.
 class CookWeightRow extends StatelessWidget {
@@ -3557,7 +3596,8 @@ class PrepScreen extends StatefulWidget {
   State<PrepScreen> createState() => _PrepScreenState();
 }
 
-class _PrepScreenState extends State<PrepScreen> {
+class _PrepScreenState extends State<PrepScreen>
+    with WidgetsBindingObserver, KeepScreenAwake<PrepScreen> {
   bool _loading = true;
   String _error = '';
 
@@ -3570,7 +3610,14 @@ class _PrepScreenState extends State<PrepScreen> {
   @override
   void initState() {
     super.initState();
+    startKeepingAwake();
     _load();
+  }
+
+  @override
+  void dispose() {
+    stopKeepingAwake();
+    super.dispose();
   }
 
   Future<void> _load({bool force = false}) async {
