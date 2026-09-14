@@ -8,6 +8,7 @@ import 'chef_models.dart';
 import 'chef_sync.dart';
 import 'cook_timers.dart';
 import 'cook_session.dart';
+import 'menu_sync.dart';
 import 'cooked_handoff.dart';
 import 'liver.dart';
 import 'models.dart';
@@ -43,7 +44,7 @@ class CookTab extends StatefulWidget {
   State<CookTab> createState() => _CookTabState();
 }
 
-class _CookTabState extends State<CookTab> {
+class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   int _servings = 2;
   MealHistory _history = const MealHistory(kSeedMealHistory);
   List<PlannedMeal> _planned = <PlannedMeal>[];
@@ -53,9 +54,11 @@ class _CookTabState extends State<CookTab> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _history = MealHistory.decode(LocalCache.loadHistory());
     _planned = PlannedMenu.decode(LocalCache.loadPlanned()).meals;
     _box = RecipeBox.decode(LocalCache.loadRecipeBox());
+    _syncMenu();
     ChefKeys.hasUsableKey().then((bool v) {
       if (mounted) {
         setState(() => _hasKey = v);
@@ -63,13 +66,40 @@ class _CookTabState extends State<CookTab> {
     }).catchError((Object _) {});
   }
 
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// The menu travels, so a meal planned on the phone is on the iPad and the
+  /// shopping list ticked in the shop is the one waiting at home. Pulled on
+  /// open and on every return to the app, the same beats as the pantry.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _syncMenu();
+    }
+  }
+
+  Future<void> _syncMenu() async {
+    final List<PlannedMeal>? merged = await MenuSync.pull(_planned);
+    if (merged == null || !mounted) {
+      return;
+    }
+    setState(() => _planned = merged);
+    LocalCache.savePlanned(PlannedMenu(_planned).encode());
+  }
+
   void _markCooked(String title) {
     setState(() => _history = _history.withCooked(title));
     LocalCache.saveHistory(_history.encode());
   }
 
-  void _persistPlanned() =>
-      LocalCache.savePlanned(PlannedMenu(_planned).encode());
+  void _persistPlanned() {
+    LocalCache.savePlanned(PlannedMenu(_planned).encode());
+    MenuSync.pushSoon(_planned);
+  }
 
   void _persistBox() => LocalCache.saveRecipeBox(_box.encode());
 
@@ -159,6 +189,7 @@ class _CookTabState extends State<CookTab> {
   void _removePlanned(PlannedMeal meal) {
     setState(() =>
         _planned = _planned.where((PlannedMeal m) => m.id != meal.id).toList());
+    MenuSync.noteRemoved(<int>[meal.createdAtMs]);
     _persistPlanned();
   }
 

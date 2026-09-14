@@ -89,6 +89,20 @@ class LocalCache {
     return v is int ? v : (v is num ? v.round() : fallback);
   }
 
+  /// A small list of ids, for the menu's removal tombstones.
+  static List<int> prefIntList(String key) {
+    final dynamic v = _prefs[key];
+    if (v is List) {
+      return v.whereType<num>().map((num n) => n.round()).toList();
+    }
+    return <int>[];
+  }
+
+  static void setPrefIntList(String key, List<int> value) {
+    _prefs[key] = value;
+    _writePrefs();
+  }
+
   static void setPrefInt(String key, int value) {
     _prefs[key] = value;
     _writePrefs();
