@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'chef_sync.dart';
 import 'cook.dart';
 import 'food_lookup.dart';
 import 'github_sync.dart';
@@ -83,6 +84,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .withPantry(_items, DateTime.now());
     LocalCache.savePriceBook(_prices.encode());
     _syncFromRemote();
+    _syncChefProfile();
   }
 
   @override
@@ -98,7 +100,20 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _syncFromRemote();
+      _syncChefProfile();
     }
+  }
+
+  /// The chef's settings live on GitHub too, so the iPad cooks with the same
+  /// equipment and the same avoid list as the phone. Pulled on the same beats
+  /// as the pantry — open and resume — because a device left open on the
+  /// counter should not be running last week's avoid list.
+  void _syncChefProfile() {
+    ChefSync.pull().then((bool changed) {
+      if (changed && mounted) {
+        setState(() {});
+      }
+    }).catchError((Object _) {});
   }
 
   /// While a push is pending, retry it every 20 s until it lands. Cheap, and it
@@ -322,6 +337,11 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   /// if it would exceed total, total too). false = used some (clamps at 0).
   /// When a "use" empties a tracked item it moves to the Used-up history; we
   /// offer an Undo that restores what was there before.
+  /// Take what a cooked meal actually used off the shelf. Same path as the
+  /// Use(-) button, so the spending ledger and the GitHub push come along.
+  void _useForCook(PantryItem item, double grams) =>
+      _adjust(item, grams, false);
+
   void _adjust(PantryItem item, double amount, bool add) {
     double? restore;
     double consumed = 0; // amount actually used (for the spending ledger)
@@ -621,7 +641,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         _quick.where((QuickAddItem q) => !q.deleted).toList();
     final List<Widget> pages = <Widget>[
       PantryTab(items: visibleItems, onTapItem: _openItem),
-      CookTab(items: visibleItems, prices: _prices),
+      CookTab(items: visibleItems, prices: _prices, onUse: _useForCook),
       QuickAddTab(
           quick: visibleQuick, onReAdd: _reAdd, onDelete: _deleteQuickAdd),
       SettingsTab(
@@ -631,10 +651,24 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           spending: _usage),
     ];
 
+    // The iPad is a cooking surface, not a second copy of the app. Pantry
+    // edits, Quick-Add and the shopping run all happen on the phone; here the
+    // whole screen belongs to Cook, with Settings one tap away so the chef
+    // model and the API key are still reachable.
+    final bool tablet = MediaQuery.sizeOf(context).shortestSide >= 600;
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: kBg,
         elevation: 0,
+        actions: <Widget>[
+          if (tablet)
+            IconButton(
+              tooltip: 'Settings',
+              onPressed: () => _openSettings(visibleItems.length),
+              icon: const Icon(Icons.settings_rounded, color: kInk),
+            ),
+        ],
         title: Row(children: [
           const Icon(Icons.kitchen_rounded, color: kAccent, size: 22),
           const SizedBox(width: 8),
@@ -666,7 +700,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
       ),
       // FAB lives on the OUTER Scaffold so it is positioned above the bottom
       // NavigationBar (fixes the nav-bar overlap). Only shown on the Pantry tab.
-      floatingActionButton: _tab == 0
+      floatingActionButton: (!tablet && _tab == 0)
           ? FloatingActionButton.extended(
               backgroundColor: kAccent,
               foregroundColor: Colors.white,
@@ -676,23 +710,48 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   style: TextStyle(fontWeight: FontWeight.w700)),
             )
           : null,
-      body: IndexedStack(index: _tab, children: pages),
-      bottomNavigationBar: NavigationBar(
-        backgroundColor: kCard,
-        indicatorColor: kAccent.withValues(alpha: 0.18),
-        selectedIndex: _tab,
-        onDestinationSelected: (int i) => setState(() => _tab = i),
-        destinations: const <NavigationDestination>[
-          NavigationDestination(
-              icon: Icon(Icons.list_alt_rounded), label: 'Pantry'),
-          NavigationDestination(
-              icon: Icon(Icons.restaurant_menu_rounded), label: 'Cook'),
-          NavigationDestination(icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
-          NavigationDestination(
-              icon: Icon(Icons.settings_rounded), label: 'Settings'),
-        ],
-      ),
+      body: tablet
+          ? CookTab(items: visibleItems, prices: _prices, onUse: _useForCook)
+          : readableColumn(IndexedStack(index: _tab, children: pages)),
+      bottomNavigationBar: tablet
+          ? null
+          : NavigationBar(
+              backgroundColor: kCard,
+              indicatorColor: kAccent.withValues(alpha: 0.18),
+              selectedIndex: _tab,
+              onDestinationSelected: (int i) => setState(() => _tab = i),
+              destinations: const <NavigationDestination>[
+                NavigationDestination(
+                    icon: Icon(Icons.list_alt_rounded), label: 'Pantry'),
+                NavigationDestination(
+                    icon: Icon(Icons.restaurant_menu_rounded), label: 'Cook'),
+                NavigationDestination(
+                    icon: Icon(Icons.bolt_rounded), label: 'Quick-Add'),
+                NavigationDestination(
+                    icon: Icon(Icons.settings_rounded), label: 'Settings'),
+              ],
+            ),
     );
+  }
+
+  /// Settings as a pushed page, for the tablet where there is no nav bar.
+  void _openSettings(int itemCount) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Scaffold(
+        appBar: AppBar(
+            backgroundColor: kBg,
+            elevation: 0,
+            title: const Text('Settings',
+                style: TextStyle(
+                    fontWeight: FontWeight.w700, letterSpacing: 0.3))),
+        body: readableColumn(SettingsTab(
+          syncing: _syncing,
+          onSyncNow: _syncFromRemote,
+          itemCount: itemCount,
+          spending: _usage,
+        )),
+      ),
+    ));
   }
 
   void _openItem(PantryItem item) {

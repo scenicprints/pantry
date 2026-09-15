@@ -43,7 +43,11 @@ dev_dependencies:
 # produced by scratchpad/gen_icon.py â†’ assets/icon/*.
 flutter_launcher_icons:
   android: true
-  ios: false
+  # iOS icons are generated in CI, right after `flutter create --platforms=ios`
+  # makes ios/Runner/Assets.xcassets. The App Store rejects an icon with an
+  # alpha channel, so flatten it.
+  ios: true
+  remove_alpha_ios: true
   image_path: "assets/icon/pantry_icon.png"
   adaptive_icon_background: "#0E0F12"
   adaptive_icon_foreground: "assets/icon/pantry_icon_fg.png"

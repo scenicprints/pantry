@@ -1,0 +1,38 @@
+name: Analyze & Test
+
+# Runs on every push and pull request that touches the app. Nothing is built,
+# signed or released here — release.yml still owns that, and still only fires
+# on a version tag. This exists so a change can be checked without shipping it.
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'lib/**'
+      - 'test/**'
+      - 'pubspec.yaml'
+      - '.github/workflows/test.yml'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.44.2'
+          channel: stable
+          cache: true
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test

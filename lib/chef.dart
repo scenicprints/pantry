@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
 
@@ -17,8 +18,11 @@ import 'pricebook.dart';
 //   Call 2  generateRecipe()  → the full grams-based recipe
 //
 // Model default: claude-haiku-4-5 (cheap, plenty for this). Optional
-// claude-sonnet-4-6 toggle. The fixed rules ride in the cached system block;
-// the live pantry + history + servings are the per-call user message.
+// claude-sonnet-4-6 and claude-opus-5 toggles. Opus 5 replaced opus-4-8 at
+// the same price per token, so the top slot got better for nothing.
+//
+// The fixed rules ride in the cached system block; the live pantry + history
+// + servings are the per-call user message.
 //
 // The API key is entered once in Settings and stored encrypted on-device via
 // flutter_secure_storage — never hardcoded, never in the repo. Native apps
@@ -27,7 +31,7 @@ import 'pricebook.dart';
 
 const String kChefModelHaiku = 'claude-haiku-4-5';
 const String kChefModelSonnet = 'claude-sonnet-4-6';
-const String kChefModelOpus = 'claude-opus-4-8';
+const String kChefModelOpus = 'claude-opus-5';
 
 // ═══════════════════════════════════════════════════════════════════════
 // EQUIPMENT — what the user actually cooks with. The chef used to have this
@@ -113,7 +117,13 @@ String? deviceNote(String name) {
 
 class ChefException implements Exception {
   final String message;
-  ChefException(this.message);
+
+  /// True when the call reached Claude and came back unreadable, rather than
+  /// failing for a reason a retry can't mend (a bad key, no network). A
+  /// formatting slip is usually transient, so those get one more go.
+  final bool unreadable;
+
+  ChefException(this.message, {this.unreadable = false});
   @override
   String toString() => message;
 }
@@ -522,8 +532,9 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
 Write the full recipe for "${option.title}" (${option.desc}) for $servings
-${servings == 1 ? 'person' : 'people'}. ALL measurements in GRAMS (count items
-like eggs as counts). Cook Miracle Noodles IN the sauce if used. Include heat
+${servings == 1 ? 'person' : 'people'}. Measurements in GRAMS for anything
+weighed, counts for count items like eggs, spoons for spices, and "to taste"
+for salt and pepper. Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
 Keep it as simple as the dish honestly allows: as few steps and as few
 ingredients as the dish actually needs, and no technique a home cook on a
@@ -587,8 +598,199 @@ are numbers in dollars (e.g. 12.75).''';
     return Recipe.fromJson(data, baseServings: servings);
   }
 
+  // ── cook it again, better ─────────────────────────────────────────────
+
+  /// Rewrite [recipe] applying what the cook wrote down after cooking it.
+  ///
+  /// The app remembers that a meal was cooked, never how it went, so the same
+  /// flaw came back every time. This is where a note turns into a change.
+  static Future<Recipe> reviseRecipe({
+    required Recipe recipe,
+    required List<String> notes,
+    required int servings,
+    required List<PantryItem> pantry,
+    PriceBook prices = const PriceBook(),
+  }) async {
+    final StringBuffer noteList = StringBuffer();
+    for (final String n in notes) {
+      noteList.writeln('- $n');
+    }
+    final String knownPrices = formatKnownPrices(prices, pantry);
+    final String equipment = formatEquipment(await ChefKeys.getEquipment());
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
+    final String servingWord = servings == 1 ? 'person' : 'people';
+
+    final String user = '''
+Rewrite this recipe for $servings $servingWord, applying what the cook wrote
+down after cooking it.
+
+It is the SAME DISH. Keep the title, keep the character of it. Change what the
+notes ask for, and anything that genuinely follows from that change: if a note
+says it was too salty, the salt drops AND anything salty that fed into it; if a
+note says a step ran long, that step's time and its timerSeconds both change.
+Change nothing the notes do not touch.
+
+WHAT THE COOK WROTE (oldest first, so the last line is the most recent):
+$noteList
+THE RECIPE AS IT STANDS (written for ${recipe.baseServings} ${recipe.baseServings == 1 ? 'person' : 'people'}):
+${jsonEncode(recipe.toJson())}
+
+PANTRY (what is on hand now; prices are per gram or per unit):
+${formatPantry(pantry)}
+${knownPrices.isEmpty ? '' : '''
+
+KNOWN PRICES (use these exact unit prices for these new buys):
+$knownPrices'''}
+$equipment
+$avoids
+Measurements in GRAMS for anything weighed, counts for count items like eggs,
+spoons for spices, and "to taste" for salt and pepper. Follow every user rule
+and the recipe format. Keep it as simple as the dish honestly allows.
+
+COST: estimate estCostTotal (whole recipe), estCostPerServing, and
+estGroceryCost (ONLY the new buys), in US dollars.
+
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"title":"","description":"","ingredients":[{"item":"","amount":""}],"steps":[{"title":"","content":"","timerSeconds":0}],"notes":"","estCostTotal":0,"estCostPerServing":0,"estGroceryCost":0}
+"notes" is one string containing protein per serving, calories per serving,
+saturated fat, added sugar and fiber per serving, any new buys, storage/pro
+tips, one short line on how the dish sits with the fatty liver, and one short
+line saying what you changed and why.''';
+
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    return Recipe.fromJson(data, baseServings: servings);
+  }
+
+  // ── mise en place ─────────────────────────────────────────────────────
+
+  /// Plan the measuring: which ingredients can share a bowl because they go
+  /// into the pan at the same moment and keep together until then.
+  ///
+  /// Deliberately a separate pass over a finished recipe rather than a field
+  /// on the generation, so anything already in the recipe box can get one.
+  static Future<PrepPlan> planPrep(Recipe recipe) async {
+    final StringBuffer ing = StringBuffer();
+    for (final RecipeIngredient i in recipe.ingredients) {
+      ing.writeln('- ${i.item}: ${i.amount}');
+    }
+    final StringBuffer steps = StringBuffer();
+    for (int i = 0; i < recipe.steps.length; i++) {
+      final RecipeStep st = recipe.steps[i];
+      steps.writeln(
+          '${i + 1}. ${st.title.isEmpty ? '' : '${st.title} — '}${st.content}');
+    }
+    final String servingWord =
+        recipe.baseServings == 1 ? 'serving' : 'servings';
+
+    final String user = '''
+Plan the mise en place for "${recipe.title}". The cook measures everything into
+bowls before starting.
+
+Two ingredients share a bowl ONLY when they go into the pan at the same moment
+AND sitting together until then harms neither.
+
+Never put in the same bowl:
+- raw meat, poultry, fish or raw egg with anything at all
+- salt or sugar with cut vegetables, or with anything that will weep
+- an acid (citrus, vinegar, wine, tomato) with dairy
+- baking soda or baking powder with any acid or any liquid
+- fresh soft herbs with anything hot or acidic
+- anything added to taste at the end, or any garnish
+
+Everything else that goes in together can share. An ingredient that shares with
+nothing still gets its own bowl: every ingredient below must appear exactly
+once across the bowls, none dropped, none repeated.
+
+Name each bowl for what it is ("Aromatics", "Tomato base", "Spice mix"), never
+"Bowl 1". Set "step" to the number of the step it goes into, or 0 if it is not
+tied to one. Copy each amount EXACTLY as written below. "prep" is the knife
+work if the ingredient list or a step calls for any ("diced", "thinly sliced"),
+otherwise an empty string.
+
+ALSO say what gets COOKED TOGETHER, in "cookGroups". A cook group is a set of
+ingredients that end up as one mass you could still put on a scale: one tray,
+one pan, one pot. This is a different question from the bowls. Two things can
+share a bowl and end up in different pans, and two things measured separately
+can end up stirred into the same sauce.
+
+- One group per vessel. A side cooked on its own tray is its own group, and
+  that is the whole point of the question.
+- Anything stirred INTO a group belongs to that group, however late it goes in.
+- Anything eaten raw or added at the table (a garnish, a dressing spooned over,
+  salt to taste) goes in NO group. Leave it out.
+- Use the exact ingredient names from the list below, and name each group for
+  its vessel or its dish ("Sheet pan", "Rice pot", "Yogurt sauce").
+
+INGREDIENTS (for ${recipe.baseServings} $servingWord):
+$ing
+STEPS:
+$steps
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}],"cookGroups":[{"name":"","items":[""]}]}''';
+
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    return PrepPlan.fromJson(data, baseServings: recipe.baseServings);
+  }
+
+  // ── out of an ingredient ──────────────────────────────────────────────
+
+  /// A swap for [missing], preferring what the pantry already holds.
+  static Future<Substitution> substitute({
+    required Recipe recipe,
+    required RecipeIngredient missing,
+    required List<PantryItem> pantry,
+    required int servings,
+  }) async {
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
+    final double factor =
+        recipe.baseServings == 0 ? 1 : servings / recipe.baseServings;
+    final String servingWord = servings == 1 ? 'serving' : 'servings';
+    final String user = '''
+The cook is partway through "${recipe.title}" and has run out of
+"${missing.item}" (the recipe calls for ${missing.scaled(factor)}).
+
+Give ONE swap. Prefer something in the pantry below; only reach outside it if
+the pantry genuinely holds nothing that works. Give the amount for $servings
+$servingWord.
+
+"use" is what to use instead, with the amount.
+"fromPantry" is true ONLY if the swap is on the pantry list below.
+"note" is what changes about the dish and anything to do differently, at most
+two short sentences. Empty string if nothing changes.
+
+PANTRY:
+${formatPantry(pantry)}
+$avoids
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"use":"","note":"","fromPantry":false}''';
+
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 600);
+    return Substitution.fromJson(data);
+  }
+
   // ── shared request ────────────────────────────────────────────────────
+  /// One call, with a single retry when the reply comes back unreadable.
+  ///
+  /// A model that answers in prose or fumbles its JSON almost always gets it
+  /// right the second time, and the alternative was a dead end: the cook is
+  /// told the reply was invalid and has to start over by hand. Only unreadable
+  /// replies are retried — a bad key or a dead connection is not worth a
+  /// second call.
   static Future<Map<String, dynamic>> _post({
+    required String user,
+    required int maxTokens,
+  }) async {
+    try {
+      return await _postOnce(user: user, maxTokens: maxTokens);
+    } on ChefException catch (e) {
+      if (!e.unreadable) {
+        rethrow;
+      }
+    }
+    return _postOnce(user: user, maxTokens: maxTokens);
+  }
+
+  static Future<Map<String, dynamic>> _postOnce({
     required String user,
     required int maxTokens,
   }) async {
@@ -598,9 +800,20 @@ are numbers in dollars (e.g. 12.75).''';
     }
     final String model = await ChefKeys.getModelId();
 
+    // Opus 5 THINKS BY DEFAULT; opus-4-8, which it replaced, did not. Thinking
+    // tokens are spent out of max_tokens, so a budget that comfortably held
+    // five options before now has to cover the reasoning as well — and when it
+    // runs out, the JSON is truncated mid-object and the reply is unreadable.
+    //
+    // Every call here wants a filled-in JSON shape, not a hard think, so ask
+    // for low effort rather than switching thinking off: disabling it on Opus 5
+    // has its own failure modes (stray tags leaking into the text). Then give
+    // the budget and the clock room for whatever thinking still happens.
+    final bool thinks = _thinksByDefault(model);
     final Map<String, dynamic> body = <String, dynamic>{
       'model': model,
-      'max_tokens': maxTokens,
+      'max_tokens': thinks ? maxTokens * 3 : maxTokens,
+      if (thinks) 'output_config': <String, dynamic>{'effort': 'low'},
       // Fixed rules ride in a cached system block; only the user turn varies.
       'system': <Map<String, dynamic>>[
         <String, dynamic>{
@@ -626,7 +839,7 @@ are numbers in dollars (e.g. 12.75).''';
             },
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 60));
+          .timeout(Duration(seconds: thinks ? 150 : 60));
     } catch (_) {
       throw ChefException('Network error — check your connection and retry.');
     }
@@ -649,7 +862,8 @@ are numbers in dollars (e.g. 12.75).''';
       if (e is ChefException) {
         rethrow;
       }
-      throw ChefException("Couldn't read the chef's reply — try again.");
+      throw ChefException("Couldn't read the chef's reply — try again.",
+          unreadable: true);
     }
   }
 
@@ -677,19 +891,129 @@ are numbers in dollars (e.g. 12.75).''';
     }
   }
 
-  /// Pull the first JSON object out of the reply, tolerating stray markdown
-  /// fences or prose around it.
+  /// Models that reason before answering unless told otherwise. Opus 5 and
+  /// Sonnet 5 do; the 4.x models this app used before did not, which is why
+  /// the token budgets here were sized without it.
+  static bool _thinksByDefault(String model) =>
+      model.startsWith('claude-opus-5') || model.startsWith('claude-sonnet-5');
+
+  /// Test hook for [_extractJson]. Reading a model's reply is the one piece
+  /// of this file that can be checked without spending a call, and it is the
+  /// piece that failed in the field.
+  @visibleForTesting
+  static Map<String, dynamic> debugExtractJson(String text) =>
+      _extractJson(text);
+
+  /// Pull the JSON object out of the reply, tolerating markdown fences and
+  /// prose around it.
+  ///
+  /// The old version took everything between the first "{" and the last "}",
+  /// which breaks the moment a stray brace appears in prose before the JSON,
+  /// or the reply is two objects. It also gave the same message whether the
+  /// chef answered in words or returned broken JSON, so a report of it was
+  /// impossible to act on. Now it tries the BALANCED object at every brace
+  /// in turn and keeps the first that decodes to an object, so a "{curly}" in
+  /// the prose no longer hides the real reply. When the chef answered in
+  /// plain words it says so and quotes him.
   static Map<String, dynamic> _extractJson(String text) {
-    final int start = text.indexOf('{');
-    final int end = text.lastIndexOf('}');
-    if (start < 0 || end <= start) {
-      throw ChefException("The chef's reply wasn't valid — try again.");
+    final String s = _stripFences(text).trim();
+    if (!s.contains('{')) {
+      throw ChefException(_plainAnswer(s), unreadable: true);
     }
-    final dynamic d = jsonDecode(text.substring(start, end + 1));
-    if (d is Map<String, dynamic>) {
-      return d;
+    for (final String candidate in _jsonCandidates(s)) {
+      try {
+        final dynamic d = jsonDecode(candidate);
+        if (d is Map<String, dynamic>) {
+          return d;
+        }
+      } catch (_) {
+        // try the next shape
+      }
     }
-    throw ChefException("The chef's reply wasn't valid — try again.");
+    throw ChefException("The chef's reply came back garbled.", unreadable: true);
+  }
+
+  /// Every balanced object in the reply, in order, then the greedy
+  /// first-to-last span as a last resort.
+  ///
+  /// Each brace gets its own attempt because the first one is not always the
+  /// real one: a reply opening with "Note: use {curly} quotes." would
+  /// otherwise hide the JSON that follows it. Capped, so a pathological reply
+  /// can't turn this quadratic.
+  static List<String> _jsonCandidates(String s) {
+    const int maxTries = 24;
+    final List<String> out = <String>[];
+    int tries = 0;
+    for (int i = 0; i < s.length && tries < maxTries; i++) {
+      if (s[i] != '{') {
+        continue;
+      }
+      tries++;
+      final String? obj = _balancedFrom(s, i);
+      if (obj != null && !out.contains(obj)) {
+        out.add(obj);
+      }
+    }
+    final int first = s.indexOf('{');
+    final int last = s.lastIndexOf('}');
+    if (first >= 0 && last > first) {
+      final String greedy = s.substring(first, last + 1);
+      if (!out.contains(greedy)) {
+        out.add(greedy);
+      }
+    }
+    return out;
+  }
+
+  /// The balanced object beginning at [start], or null if it never closes.
+  /// String-aware, so a brace or a quote inside a description is just text.
+  static String? _balancedFrom(String s, int start) {
+    int depth = 0;
+    bool inString = false;
+    bool escaped = false;
+    for (int i = start; i < s.length; i++) {
+      final String c = s[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (c == r'\') {
+          escaped = true;
+        } else if (c == '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c == '"') {
+        inString = true;
+      } else if (c == '{') {
+        depth++;
+      } else if (c == '}') {
+        depth--;
+        if (depth == 0) {
+          return s.substring(start, i + 1);
+        }
+      }
+    }
+    return null;
+  }
+
+  /// Strip a ```json fence if the reply came wrapped in one.
+  static String _stripFences(String text) {
+    final RegExp fence = RegExp(r'```(?:json)?\s*([\s\S]*?)```', multiLine: true);
+    final RegExpMatch? m = fence.firstMatch(text);
+    return m != null ? (m.group(1) ?? text) : text;
+  }
+
+  /// The chef said something in words rather than handing back a dish. Quote
+  /// him: "I can't do that without X" is worth reading, and infinitely more
+  /// use than being told the reply was invalid.
+  static String _plainAnswer(String s) {
+    final String line = s.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (line.isEmpty) {
+      return 'The chef sent an empty reply. Try again.';
+    }
+    final String quote = line.length > 200 ? '${line.substring(0, 200)}…' : line;
+    return 'The chef answered in words instead of a dish: "$quote"';
   }
 
   /// One line per in-stock item for the prompt.
@@ -744,6 +1068,29 @@ are numbers in dollars (e.g. 12.75).''';
   /// Prices for things the user has bought before but does NOT currently have
   /// in the pantry — so the chef can price familiar new buys accurately. Skips
   /// anything already listed as in-stock.
+  /// A food's name with the brand and packaging stripped, so "Chicken Breast
+  /// Fillets (Co-op)" and "Boneless, Skinless Chicken Breast Fillet (Just
+  /// BARE)" are recognised as the same thing to be priced.
+  static String _foodKey(String s) => s
+      .toLowerCase()
+      .replaceAll(RegExp(r'\([^)]*\)'), ' ')
+      .replaceAll(
+          RegExp(r'\b(boneless|skinless|fresh|organic|raw|frozen|fillets?|'
+              r'extra|lean|style|whole|large|small)\b'),
+          ' ')
+      .replaceAll(RegExp(r'[^a-z]+'), ' ')
+      .trim();
+
+  /// A price no grocery shop charges, which means the pack weight was
+  /// mistyped when it was scanned. Spices are exempt: they genuinely cost a
+  /// fortune per pound and a recipe uses a gram of them.
+  static bool _absurdPrice(PriceEntry e) {
+    if (e.isCount) {
+      return e.unitPrice > 25; // $25 for one of a thing
+    }
+    return e.unitPrice > 0.11; // about $50/lb
+  }
+
   static String formatKnownPrices(PriceBook prices, List<PantryItem> pantry) {
     if (prices.isEmpty) {
       return '';
@@ -752,10 +1099,35 @@ are numbers in dollars (e.g. 12.75).''';
         .where((PantryItem i) => !i.deleted && (i.remaining > 0 || i.untracked))
         .map((PantryItem i) => i.name.trim().toLowerCase())
         .toSet();
-    final List<PriceEntry> known = prices.byName.values
-        .where((PriceEntry e) =>
-            e.unitPrice > 0 && !inStock.contains(e.name.trim().toLowerCase()))
-        .toList()
+    // The chef is told to quote these EXACTLY, so anything wrong here lands
+    // straight in the cost of dinner. Two things go wrong in a real price
+    // book, and both did:
+    //
+    //  * The same food appears several times at different prices, because it
+    //    was bought at different shops under different brand names. Chicken
+    //    breast sat at both $5.67 and $22.68 a pound. Quoting the dear one
+    //    made an ordinary dinner look like a night out.
+    //  * A pack weight gets mistyped once and the unit price is nonsense
+    //    forever after — orange juice at $226 a pound.
+    //
+    // So: collapse each food to the CHEAPEST price recorded for it, and drop
+    // the impossible ones entirely. Dropping is better than quoting them,
+    // because the chef falls back to estimating an ordinary grocery price,
+    // which is far closer to the truth than the bad number.
+    final Map<String, PriceEntry> best = <String, PriceEntry>{};
+    for (final PriceEntry e in prices.byName.values) {
+      if (e.unitPrice <= 0 ||
+          inStock.contains(e.name.trim().toLowerCase()) ||
+          _absurdPrice(e)) {
+        continue;
+      }
+      final String key = '${e.isCount ? 'n' : 'g'}:${_foodKey(e.name)}';
+      final PriceEntry? had = best[key];
+      if (had == null || e.unitPrice < had.unitPrice) {
+        best[key] = e;
+      }
+    }
+    final List<PriceEntry> known = best.values.toList()
       ..sort((PriceEntry a, PriceEntry b) =>
           a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     if (known.isEmpty) {
@@ -847,7 +1219,12 @@ USER PROFILE (hard rules — never violate):
   exercise. He notices the grocery bill, so don't be wasteful; but a dinner
   worth eating is worth paying the ordinary price for. Where cost and the liver
   rules pull against each other, the liver wins.
-- Measurements: ALWAYS grams (never oz). Count items like eggs stay as counts.
+- Measurements: grams (never oz) for anything that gets weighed — proteins,
+  vegetables, grains, legumes, dairy, oil. Count items like eggs stay as counts.
+  Salt, pepper and dried spices do NOT go in grams; nobody weighs them. Use
+  teaspoons and tablespoons for spices, and "to taste" for salt and pepper. The
+  exception is where the amount genuinely has to be exact — a brine, a cure, or
+  anything baked — and there grams are right.
 
 FATTY LIVER RULES (hard rules — they outrank taste, cost and the pantry):
 Cooking for this liver is a Mediterranean pattern: vegetables and legumes in
@@ -1009,7 +1386,9 @@ ingredients proportionally and adjust servings. Note when air frying must be
 done in batches due to volume.
 
 RECIPE OUTPUT FORMAT:
-- All measurements in grams (counts for count items).
+- Grams for anything weighed, counts for count items, spoons for spices, and
+  "to taste" for salt and pepper. Never grams of salt, pepper or dried spice
+  outside a brine, a cure or a bake.
 - title -> description -> ingredients (with amounts) -> numbered steps (each
   with a short title) -> notes.
 - Notes: protein per serving, calories per serving, saturated fat per serving,

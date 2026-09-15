@@ -117,3 +117,41 @@ TextStyle mono({
 /// Small-caps mono section label.
 TextStyle labelCaps({Color color = kMuted}) => GoogleFonts.ibmPlexMono(
     fontSize: 11, fontWeight: FontWeight.w600, color: color, letterSpacing: 1.4);
+
+/// Cap a phone-shaped layout at a readable column and centre it on the page
+/// background, so a tablet shows deliberate margins instead of a pantry row
+/// stretched across 1100px. Below [maxWidth] it does nothing.
+///
+/// Applied per screen, never app-wide: cooking mode and the measuring sheet
+/// want the whole tablet, and an app-wide cap would quietly deny it to them.
+Widget readableColumn(Widget child, {double maxWidth = 640}) {
+  return LayoutBuilder(
+    builder: (BuildContext context, BoxConstraints c) {
+      if (c.maxWidth <= maxWidth) {
+        return child;
+      }
+      return ColoredBox(
+        color: kBg,
+        child: Center(
+          child: ConstrainedBox(
+              constraints: BoxConstraints(maxWidth: maxWidth), child: child),
+        ),
+      );
+    },
+  );
+}
+
+/// Side padding that turns into a centred column once the screen is wider
+/// than a phone. Same effect as [readableColumn] but as padding, for the
+/// list-bodied screens where wrapping the ListView would cost a layer.
+EdgeInsets pagePadding(
+  BuildContext context, {
+  double top = 0,
+  double bottom = 0,
+  double side = 20,
+  double maxWidth = 640,
+}) {
+  final double w = MediaQuery.sizeOf(context).width;
+  final double gutter = w > maxWidth + side * 2 ? (w - maxWidth) / 2 : side;
+  return EdgeInsets.fromLTRB(gutter, top, gutter, bottom);
+}

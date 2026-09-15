@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io' show Platform;
+
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
@@ -10,6 +12,9 @@ import 'theme.dart';
 // IN-APP OTA UPDATER — checks the latest GitHub Release for this repo,
 // compares versions, and downloads + installs the newer APK. The code repo
 // is public, so the releases API needs no token. (Same as BodyComp.)
+//
+// ANDROID ONLY. iOS forbids an app installing its own binary, so the iPad
+// build gets its updates from TestFlight instead and the card just says so.
 // ═══════════════════════════════════════════════════════════════════════
 
 const String kRepoOwner = 'scenicprints';
@@ -230,6 +235,20 @@ class _UpdateCardState extends State<UpdateCard> {
 
   Widget _body() {
     final Color accent = widget.accent;
+
+    // iOS can't side-install its own build. TestFlight delivers updates there,
+    // and installs them on its own when auto-update is on, so the card is a
+    // statement rather than a button.
+    if (Platform.isIOS) {
+      return Row(children: [
+        Icon(Icons.flight_takeoff_rounded, size: 18, color: accent),
+        const SizedBox(width: 10),
+        Expanded(
+            child: Text('Updates arrive through TestFlight.',
+                style: TextStyle(fontSize: 13, color: kInk))),
+      ]);
+    }
+
     switch (_s) {
       case _State.checking:
         return Row(children: [
