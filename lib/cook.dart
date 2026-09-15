@@ -3417,16 +3417,19 @@ class _PantryPickerSheetState extends State<PantryPickerSheet> {
     super.dispose();
   }
 
-  /// In stock, unless you ask for the rest. Spices and quantity-unknown items
-  /// carry no weight or price, so there is nothing to take off them.
+  /// In stock, unless you ask for the rest.
+  ///
+  /// Spices and quantity-unknown items are INCLUDED even though they carry no
+  /// weight. They are real things on the shelf that go in the pan, and the
+  /// cook wants to say he used them; nothing is subtracted for them, which is
+  /// already how untracked items behave everywhere else. Hiding them left him
+  /// with no way to record the soy sauce at all.
   List<PantryItem> get _matches {
     final String q = _q.text.trim().toLowerCase();
     final List<PantryItem> all = widget.pantry
         .where((PantryItem p) =>
             !p.deleted &&
-            !p.spice &&
-            !p.quantityUnknown &&
-            (_includeEmpty || p.remaining > 0))
+            (_includeEmpty || p.remaining > 0 || p.untracked))
         .where((PantryItem p) =>
             q.isEmpty || p.name.toLowerCase().contains(q))
         .toList()
@@ -3437,7 +3440,7 @@ class _PantryPickerSheetState extends State<PantryPickerSheet> {
 
   int get _emptyCount => widget.pantry
       .where((PantryItem p) =>
-          !p.deleted && !p.spice && !p.quantityUnknown && p.remaining <= 0)
+          !p.deleted && !p.untracked && p.remaining <= 0)
       .length;
 
   @override
@@ -3535,13 +3538,17 @@ class _PantryPickerSheetState extends State<PantryPickerSheet> {
                         title: Text(p.name,
                             style: const TextStyle(fontSize: 14.5)),
                         subtitle: Text(
-                            p.remaining > 0
-                                ? '${p.remaining.round()} ${p.unit == kUnitGrams ? 'g' : ''} left'
-                                    .trim()
-                                : 'used up',
+                            p.untracked
+                                ? (p.spice ? 'spice, not weighed' : 'on hand')
+                                : (p.remaining > 0
+                                    ? '${p.remaining.round()} ${p.unit == kUnitGrams ? 'g' : ''} left'
+                                        .trim()
+                                    : 'used up'),
                             style: mono(
                                 size: 11.5,
-                                color: p.remaining > 0 ? kFaint : kWarn)),
+                                color: p.untracked
+                                    ? kMuted
+                                    : (p.remaining > 0 ? kFaint : kWarn))),
                         onTap: () => Navigator.pop(context, p.id),
                       ),
                   // The stock figures are not always right, so there has to be
@@ -3669,6 +3676,7 @@ Future<bool> sendCookedMeal({
           name: e.item,
           rawG: e.measuredG,
           pantryId: e.pantryId,
+          pantryName: session.pantryFor(e)?.name ?? '',
           barcode: session.pantryFor(e)?.barcode,
           group: _panFor(session, e),
         ),
@@ -3689,7 +3697,9 @@ Future<bool> sendCookedMeal({
   int taken = 0;
   for (final CookEntry e in weighed) {
     final PantryItem? p = session.pantryFor(e);
-    if (p != null) {
+    // Untracked items (spices, on-hand things) have no stock to draw down;
+    // they still travel to BodyComp so the food gets logged.
+    if (p != null && !p.untracked) {
       onUse?.call(p, e.measuredG);
       taken++;
     }
