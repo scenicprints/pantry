@@ -37,7 +37,14 @@ const String kCookedPath = 'cooked.json';
 /// also what leaves the pantry.
 class CookedLine {
   final String pantryId; // '' when nothing in the pantry matched
-  final String name;
+  final String name; // as the RECIPE words it
+
+  /// The pantry item the cook paired this with, by its own name. This is the
+  /// whole point of pairing: the recipe says "chicken thighs, bone in" and
+  /// the shelf says "Boneless, Skinless Chicken Breast Fillet (Just BARE)",
+  /// and only the cook knows they are the same purchase. Sending just the
+  /// recipe's wording threw that away and left the other end guessing.
+  final String pantryName;
   final String? barcode;
   final double rawG;
 
@@ -49,12 +56,14 @@ class CookedLine {
     required this.name,
     required this.rawG,
     this.pantryId = '',
+    this.pantryName = '',
     this.barcode,
     this.group = '',
   });
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'pantry_id': pantryId,
+        if (pantryName.isNotEmpty) 'pantry_name': pantryName,
         'name': name,
         if (barcode != null && barcode!.isNotEmpty) 'barcode': barcode,
         if (group.isNotEmpty) 'group': group,
@@ -63,6 +72,7 @@ class CookedLine {
 
   factory CookedLine.fromJson(Map<String, dynamic> j) => CookedLine(
         pantryId: (j['pantry_id'] as String?) ?? '',
+        pantryName: (j['pantry_name'] as String?) ?? '',
         name: (j['name'] as String?) ?? '',
         barcode: j['barcode'] as String?,
         group: (j['group'] as String?) ?? '',
