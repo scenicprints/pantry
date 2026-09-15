@@ -3365,83 +3365,211 @@ class CookWeightRow extends StatelessWidget {
   }
 
   Future<void> _pick(BuildContext context) async {
-    final List<PantryItem> usable = session.pantry
-        .where((PantryItem p) => !p.deleted && !p.spice && !p.quantityUnknown)
-        .toList()
-      ..sort((PantryItem a, PantryItem b) =>
-          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-
     final String? picked = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: kCard,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (BuildContext ctx) => SafeArea(
+      builder: (_) =>
+          PantryPickerSheet(ingredient: entry.item, pantry: session.pantry),
+    );
+    if (picked == null || !context.mounted) {
+      return;
+    }
+    if (picked == _kOutOfIt) {
+      showOutOfSheet(
+        context: context,
+        recipe: session.recipe,
+        ingredient:
+            RecipeIngredient(item: entry.item, amount: entry.recipeAmount),
+        pantry: session.pantry,
+        servings: session.servings,
+      );
+      return;
+    }
+    session.setLink(entry, picked);
+  }
+}
+
+/// Pick what an ingredient comes out of.
+///
+/// It used to list every item the pantry had ever held — well over a hundred,
+/// most of them long since used up — with no way to search. Now it is what is
+/// actually in stock, and you can type.
+class PantryPickerSheet extends StatefulWidget {
+  final String ingredient;
+  final List<PantryItem> pantry;
+  const PantryPickerSheet(
+      {super.key, required this.ingredient, required this.pantry});
+
+  @override
+  State<PantryPickerSheet> createState() => _PantryPickerSheetState();
+}
+
+class _PantryPickerSheetState extends State<PantryPickerSheet> {
+  final TextEditingController _q = TextEditingController();
+  bool _includeEmpty = false;
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  /// In stock, unless you ask for the rest. Spices and quantity-unknown items
+  /// carry no weight or price, so there is nothing to take off them.
+  List<PantryItem> get _matches {
+    final String q = _q.text.trim().toLowerCase();
+    final List<PantryItem> all = widget.pantry
+        .where((PantryItem p) =>
+            !p.deleted &&
+            !p.spice &&
+            !p.quantityUnknown &&
+            (_includeEmpty || p.remaining > 0))
+        .where((PantryItem p) =>
+            q.isEmpty || p.name.toLowerCase().contains(q))
+        .toList()
+      ..sort((PantryItem a, PantryItem b) =>
+          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return all;
+  }
+
+  int get _emptyCount => widget.pantry
+      .where((PantryItem p) =>
+          !p.deleted && !p.spice && !p.quantityUnknown && p.remaining <= 0)
+      .length;
+
+  @override
+  Widget build(BuildContext context) {
+    final List<PantryItem> matches = _matches;
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+      child: SafeArea(
         child: ConstrainedBox(
           constraints:
-              BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.75),
-          child: ListView(
-            shrinkWrap: true,
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 20),
-            children: <Widget>[
-              Text('WHERE DOES THIS COME FROM?',
-                  style: labelCaps(color: kAccent)),
-              const SizedBox(height: 4),
-              Text(entry.item, style: serif(size: 19, weight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Text('Pick the pantry item it comes out of, so the right thing '
-                  'is taken off the shelf.',
-                  style: TextStyle(fontSize: 12.5, color: kMuted)),
-              const SizedBox(height: 14),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.swap_horiz_rounded, color: kAccent),
-                title: const Text("I'm out of this",
-                    style: TextStyle(fontSize: 14.5)),
-                subtitle: Text('Find a swap from what you actually have.',
-                    style: TextStyle(fontSize: 11.5, color: kFaint)),
-                onTap: () {
-                  Navigator.pop(ctx);
-                  showOutOfSheet(
-                    context: context,
-                    recipe: session.recipe,
-                    ingredient: RecipeIngredient(
-                        item: entry.item, amount: entry.recipeAmount),
-                    pantry: session.pantry,
-                    servings: session.servings,
-                  );
-                },
+              BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.85),
+          child: Column(mainAxisSize: MainAxisSize.min, children: <Widget>[
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 18, 20, 0),
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text('WHERE DOES THIS COME FROM?',
+                        style: labelCaps(color: kAccent)),
+                    const SizedBox(height: 4),
+                    Text(widget.ingredient,
+                        style: serif(size: 19, weight: FontWeight.w600)),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _q,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.none,
+                      onChanged: (_) => setState(() {}),
+                      style: const TextStyle(fontSize: 15, color: kInk),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: 'Search your pantry',
+                        hintStyle: TextStyle(color: kFaint, fontSize: 14),
+                        prefixIcon:
+                            const Icon(Icons.search_rounded, size: 19, color: kMuted),
+                        suffixIcon: _q.text.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 18),
+                                color: kMuted,
+                                onPressed: () => setState(_q.clear),
+                              ),
+                        filled: true,
+                        fillColor: kInset,
+                        contentPadding:
+                            const EdgeInsets.symmetric(vertical: 12),
+                        border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: kBorder)),
+                        enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(10),
+                            borderSide: const BorderSide(color: kBorder)),
+                      ),
+                    ),
+                  ]),
+            ),
+            Flexible(
+              child: ListView(
+                shrinkWrap: true,
+                padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+                children: <Widget>[
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading:
+                        const Icon(Icons.swap_horiz_rounded, color: kAccent),
+                    title: const Text("I'm out of this",
+                        style: TextStyle(fontSize: 14.5)),
+                    subtitle: Text('Find a swap from what you have.',
+                        style: TextStyle(fontSize: 11.5, color: kFaint)),
+                    onTap: () => Navigator.pop(context, _kOutOfIt),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.link_off_rounded, color: kWarn),
+                    title: const Text('Not from my pantry',
+                        style: TextStyle(fontSize: 14.5)),
+                    subtitle: Text('Nothing is subtracted for this one.',
+                        style: TextStyle(fontSize: 11.5, color: kFaint)),
+                    onTap: () => Navigator.pop(context, ''),
+                  ),
+                  const Divider(color: kBorder),
+                  if (matches.isEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      child: Text(
+                          _q.text.isEmpty
+                              ? 'Nothing in stock.'
+                              : 'Nothing in stock matches "${_q.text.trim()}".',
+                          style: TextStyle(fontSize: 13.5, color: kMuted)),
+                    )
+                  else
+                    for (final PantryItem p in matches)
+                      ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text(p.name,
+                            style: const TextStyle(fontSize: 14.5)),
+                        subtitle: Text(
+                            p.remaining > 0
+                                ? '${p.remaining.round()} ${p.unit == kUnitGrams ? 'g' : ''} left'
+                                    .trim()
+                                : 'used up',
+                            style: mono(
+                                size: 11.5,
+                                color: p.remaining > 0 ? kFaint : kWarn)),
+                        onTap: () => Navigator.pop(context, p.id),
+                      ),
+                  // The stock figures are not always right, so there has to be
+                  // a way to reach something the app thinks is gone.
+                  if (!_includeEmpty && _emptyCount > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: TextButton.icon(
+                        onPressed: () =>
+                            setState(() => _includeEmpty = true),
+                        icon: const Icon(Icons.history_rounded, size: 16),
+                        label: Text('Also show $_emptyCount used up',
+                            style: const TextStyle(fontSize: 13)),
+                        style: TextButton.styleFrom(foregroundColor: kMuted),
+                      ),
+                    ),
+                ],
               ),
-              const Divider(color: kBorder),
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.link_off_rounded, color: kWarn),
-                title: const Text('Not from my pantry',
-                    style: TextStyle(fontSize: 14.5)),
-                subtitle: Text('Nothing is subtracted for this one.',
-                    style: TextStyle(fontSize: 11.5, color: kFaint)),
-                onTap: () => Navigator.pop(ctx, ''),
-              ),
-              const Divider(color: kBorder),
-              for (final PantryItem p in usable)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(p.name, style: const TextStyle(fontSize: 14.5)),
-                  subtitle: Text('${p.remaining.round()} g left',
-                      style: mono(size: 11.5, color: kFaint)),
-                  onTap: () => Navigator.pop(ctx, p.id),
-                ),
-            ],
-          ),
+            ),
+          ]),
         ),
       ),
     );
-    if (picked != null) {
-      session.setLink(entry, picked);
-    }
   }
 }
+
+/// Sentinel the picker returns when the cook says he has run out.
+const String _kOutOfIt = '__out_of_it__';
 
 /// The whole list, for the panel you pull up mid-cook.
 class CookWeightsPanel extends StatelessWidget {
@@ -3732,25 +3860,32 @@ class _PrepScreenState extends State<PrepScreen>
     }
 
     final bool wide = MediaQuery.sizeOf(context).width >= kSplitMinWidth;
-    final PrepPlan? plan = _s.plan;
-    final List<Widget> cards = <Widget>[];
-    final Set<String> placed = <String>{};
 
-    if (plan != null) {
-      for (int b = 0; b < plan.bowls.length; b++) {
-        cards.add(_bowlCard(plan.bowls[b], placed));
+    // The rows MUST be built inside the builder. Building them out here and
+    // capturing the list meant Flutter saw the identical widget objects on a
+    // rebuild and skipped them, so linking an ingredient to a pantry item
+    // saved the link and then went on showing "not from my pantry" forever.
+    List<Widget> buildCards() {
+      final PrepPlan? plan = _s.plan;
+      final List<Widget> cards = <Widget>[];
+      final Set<String> placed = <String>{};
+      if (plan != null) {
+        for (int b = 0; b < plan.bowls.length; b++) {
+          cards.add(_bowlCard(plan.bowls[b], placed));
+        }
       }
-    }
-    // Anything the plan didn't mention still has to be weighable.
-    final List<CookEntry> rest = _s.entries
-        .where((CookEntry e) => !placed.contains(foodKey(e.item)))
-        .toList();
-    if (rest.isNotEmpty) {
-      cards.add(_card(plan == null ? 'Ingredients' : 'Everything else',
-          <Widget>[
-            for (final CookEntry e in rest)
-              CookWeightRow(session: _s, entry: e),
-          ], 0));
+      // Anything the plan didn't mention still has to be weighable.
+      final List<CookEntry> rest = _s.entries
+          .where((CookEntry e) => !placed.contains(foodKey(e.item)))
+          .toList();
+      if (rest.isNotEmpty) {
+        cards.add(_card(plan == null ? 'Ingredients' : 'Everything else',
+            <Widget>[
+              for (final CookEntry e in rest)
+                CookWeightRow(session: _s, entry: e),
+            ], 0));
+      }
+      return cards;
     }
 
     return AnimatedBuilder(
@@ -3772,7 +3907,7 @@ class _PrepScreenState extends State<PrepScreen>
             Text(_error, style: const TextStyle(fontSize: 13, color: kWarn)),
           ],
           const SizedBox(height: 18),
-          if (wide) _twoColumns(cards) else ...cards,
+          if (wide) _twoColumns(buildCards()) else ...buildCards(),
         ],
       ),
     );
