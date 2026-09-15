@@ -137,6 +137,17 @@ class MenuSync {
     if (remoteIsNewer) {
       LocalCache.setPrefInt(_kMenuStamp, r.$3);
     }
+
+    // SEED IT. Publishing used to happen only when the menu CHANGED, so a
+    // device already holding a menu would open, pull nothing, and never send
+    // what it had. Neither side ever wrote the file and nothing ever synced.
+    // If anything here is missing from the remote, publish now.
+    final Set<int> remoteIds =
+        r.$1.map((PlannedMeal m) => m.createdAtMs).toSet();
+    if (out.any((PlannedMeal m) => !remoteIds.contains(m.createdAtMs))) {
+      pushSoon(out);
+    }
+
     final bool same = out.length == local.length &&
         out.every((PlannedMeal m) =>
             local.any((PlannedMeal l) => l.createdAtMs == m.createdAtMs));
