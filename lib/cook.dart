@@ -8,6 +8,8 @@ import 'chef_models.dart';
 import 'chef_sync.dart';
 import 'cook_timers.dart';
 import 'cook_session.dart';
+import 'host.dart';
+import 'host_hub.dart';
 import 'menu_sync.dart';
 import 'cooked_handoff.dart';
 import 'liver.dart';
@@ -49,6 +51,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   MealHistory _history = const MealHistory(kSeedMealHistory);
   List<PlannedMeal> _planned = <PlannedMeal>[];
   RecipeBox _box = const RecipeBox();
+  HostHubBox _hostHub = const HostHubBox();
   bool _hasKey = false;
 
   @override
@@ -58,7 +61,9 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
     _history = MealHistory.decode(LocalCache.loadHistory());
     _planned = PlannedMenu.decode(LocalCache.loadPlanned()).meals;
     _box = RecipeBox.decode(LocalCache.loadRecipeBox());
+    _hostHub = HostHubBox.decode(LocalCache.loadHostHub());
     _syncMenu();
+    _syncHostHub();
     ChefKeys.hasUsableKey().then((bool v) {
       if (mounted) {
         setState(() => _hasKey = v);
@@ -79,6 +84,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _syncMenu();
+      _syncHostHub();
     }
   }
 
@@ -89,6 +95,17 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
     }
     setState(() => _planned = merged);
     LocalCache.savePlanned(PlannedMenu(_planned).encode());
+  }
+
+  /// A dinner planned on the phone has to be on the iPad at the counter, same
+  /// as "On the menu" — pulled on the same beats, open and resume.
+  Future<void> _syncHostHub() async {
+    final List<HostEvent>? merged = await HostHubSync.pull(_hostHub.events);
+    if (merged == null || !mounted) {
+      return;
+    }
+    setState(() => _hostHub = HostHubBox(merged));
+    LocalCache.saveHostHub(_hostHub.encode());
   }
 
   void _markCooked(String title) {
@@ -102,6 +119,49 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   }
 
   void _persistBox() => LocalCache.saveRecipeBox(_box.encode());
+
+  void _persistHostHub() {
+    LocalCache.saveHostHub(_hostHub.encode());
+    HostHubSync.pushSoon(_hostHub.events);
+  }
+
+  /// Save (or overwrite, by id) a Host Hub dinner. Called as soon as a menu
+  /// is built, not only when the user taps "Save" on the results screen, so
+  /// a generated recipe is never lost just for not being named yet.
+  void _saveHostEvent(HostEvent e) {
+    final int i = _hostHub.events.indexWhere((HostEvent x) => x.id == e.id);
+    setState(() {
+      if (i >= 0) {
+        final List<HostEvent> next = List<HostEvent>.of(_hostHub.events);
+        next[i] = e;
+        _hostHub = HostHubBox(next);
+      } else {
+        _hostHub = HostHubBox(<HostEvent>[..._hostHub.events, e]);
+      }
+    });
+    _persistHostHub();
+  }
+
+  void _removeHostEvent(HostEvent e) {
+    setState(() => _hostHub = HostHubBox(
+        _hostHub.events.where((HostEvent x) => x.id != e.id).toList()));
+    HostHubSync.noteRemoved(<int>[e.createdAtMs]);
+    _persistHostHub();
+  }
+
+  void _openHostHub() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => HostHubScreen(
+        events: _hostHub.sorted,
+        items: widget.items,
+        prices: widget.prices,
+        onSave: _saveHostEvent,
+        onRemove: _removeHostEvent,
+        onSaveRecipe: _saveRecipe,
+        onUse: widget.onUse,
+      ),
+    ));
+  }
 
   /// Keep a recipe on purpose. Saving the same dish twice just bumps its
   /// cooked count instead of duplicating the entry.
@@ -393,6 +453,10 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
           _menuSection(),
           const SizedBox(height: 24),
         ],
+        if (_upcomingHostEvents.isNotEmpty) ...<Widget>[
+          _hostingSection(),
+          const SizedBox(height: 24),
+        ],
         _statsRow(itemCount),
         if (_box.recipes.isNotEmpty) ...<Widget>[
           const SizedBox(height: 12),
@@ -437,7 +501,99 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
                     borderRadius: BorderRadius.circular(14))),
           ),
         ),
+        const SizedBox(height: 12),
+        SizedBox(
+          width: double.infinity,
+          height: 56,
+          child: OutlinedButton.icon(
+            onPressed: _hasKey ? _openHostHub : null,
+            icon: const Icon(Icons.groups_rounded),
+            label: Text('Host Hub',
+                style: serif(
+                    size: 17,
+                    weight: FontWeight.w600,
+                    color: _hasKey ? kAccent : kFaint)),
+            style: OutlinedButton.styleFrom(
+                foregroundColor: kAccent,
+                disabledForegroundColor: kFaint,
+                side: BorderSide(color: kAccent.withValues(alpha: 0.6), width: 1.6),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14))),
+          ),
+        ),
       ],
+    );
+  }
+
+  List<HostEvent> get _upcomingHostEvents {
+    final DateTime now = DateTime.now();
+    return _hostHub.events.where((HostEvent e) => e.isUpcoming(now)).toList();
+  }
+
+  /// Surfaces the next hosted dinner right on the Cook screen, the same way
+  /// "On the menu" does — a hub you're reminded of, not one hidden behind a
+  /// button tap.
+  Widget _hostingSection() {
+    final List<HostEvent> events = _upcomingHostEvents;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+      Row(children: <Widget>[
+        Text('HOSTING', style: labelCaps(color: kAccent)),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+              color: kAccent.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(20)),
+          child: Text('${events.length}',
+              style: mono(size: 11, weight: FontWeight.w600, color: kAccent)),
+        ),
+      ]),
+      const SizedBox(height: 4),
+      Text('A dinner you\'re planning for guests.',
+          style: TextStyle(color: kMuted, fontSize: 12, height: 1.4)),
+      const SizedBox(height: 12),
+      for (final HostEvent e in events.take(3)) _hostingCard(e),
+    ]);
+  }
+
+  Widget _hostingCard(HostEvent e) {
+    final String title = e.name.trim().isEmpty ? 'Unnamed dinner' : e.name.trim();
+    final String dateLabel = e.eventDate.isEmpty ? '' : displayDate(e.eventDate);
+    return GestureDetector(
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => HostResultsScreen(
+          event: e,
+          items: widget.items,
+          onSave: _saveHostEvent,
+          onRemove: _removeHostEvent,
+          onSaveRecipe: _saveRecipe,
+          onUse: widget.onUse,
+        ),
+      )),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: kAccent.withValues(alpha: 0.4))),
+        child: Row(children: <Widget>[
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+              Text(title,
+                  style: serif(size: 17, weight: FontWeight.w600, height: 1.2)),
+              const SizedBox(height: 6),
+              Text(
+                  <String>[
+                    '${e.guests} guest${e.guests == 1 ? '' : 's'}',
+                    if (dateLabel.isNotEmpty) dateLabel,
+                  ].join(' · '),
+                  style: mono(size: 11, color: kMuted)),
+            ]),
+          ),
+          const Icon(Icons.chevron_right_rounded, color: kMuted),
+        ]),
+      ),
     );
   }
 

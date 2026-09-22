@@ -18,6 +18,7 @@ class LocalCache {
   static late File _usageFile; // spending ledger (consumption events)
   static late File _priceBookFile; // last-known unit prices
   static late File _recipeBoxFile; // saved recipes (the recipe box)
+  static late File _hostHubFile; // saved Host Hub dinners
   static late File _prefsFile; // small UI preferences (cooking-mode toggles)
   static late File _prepFile; // cached mise en place plans, keyed by recipe
   static late File _notesFile; // what happened last time, keyed by recipe
@@ -45,6 +46,7 @@ class LocalCache {
     _usageFile = File('${filesDir.path}/usage.json');
     _priceBookFile = File('${filesDir.path}/price_book.json');
     _recipeBoxFile = File('${filesDir.path}/recipe_box.json');
+    _hostHubFile = File('${filesDir.path}/host_hub.json');
     _prefsFile = File('${filesDir.path}/prefs.json');
     _prepFile = File('${filesDir.path}/prep_plans.json');
     _notesFile = File('${filesDir.path}/cook_notes.json');
@@ -272,6 +274,22 @@ class LocalCache {
   static void saveRecipeBox(String json) {
     try {
       _recipeBoxFile.writeAsStringSync(json);
+    } catch (_) {}
+  }
+
+  /// Host Hub dinners JSON, or null if none saved yet.
+  static String? loadHostHub() {
+    try {
+      if (_hostHubFile.existsSync()) {
+        return _hostHubFile.readAsStringSync();
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static void saveHostHub(String json) {
+    try {
+      _hostHubFile.writeAsStringSync(json);
     } catch (_) {}
   }
 
