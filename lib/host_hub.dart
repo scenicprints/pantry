@@ -55,20 +55,131 @@ class HostDish {
       );
 }
 
-/// One day of a prep timeline (e.g. "Fri, Oct 2 — 1 day before").
+/// One job on the prep timeline, tied to the dish it belongs to.
+///
+/// A task is a row on a schedule, not a sentence in a recipe: "what can I do
+/// three days out" was buried in step prose, so it had to be read for, dish
+/// by dish. [dish] is the dish's title, so a line can be tapped through to
+/// the recipe it came from; it is '' for anything that belongs to the dinner
+/// rather than to one dish (setting the table, pulling things out to thaw).
+class PrepTask {
+  final String text;
+  final String dish;
+  const PrepTask({required this.text, this.dish = ''});
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'text': text,
+        if (dish.isNotEmpty) 'dish': dish,
+      };
+
+  factory PrepTask.fromJson(Map<String, dynamic> j) => PrepTask(
+        text: (j['text'] as String?) ?? '',
+        dish: (j['dish'] as String?) ?? '',
+      );
+}
+
+/// One day of the prep timeline. [date] is 'YYYY-MM-DD' where the chef gave
+/// one, so the day can be shown against the calendar and counted back from
+/// the dinner; [label] is its own wording, kept as a fallback.
 class PrepDay {
+  final String date;
   final String label;
-  final List<String> tasks;
-  const PrepDay({required this.label, required this.tasks});
+  final List<PrepTask> tasks;
+  const PrepDay({this.date = '', required this.label, required this.tasks});
 
-  Map<String, dynamic> toJson() =>
-      <String, dynamic>{'label': label, 'tasks': tasks};
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        if (date.isNotEmpty) 'date': date,
+        'label': label,
+        'tasks': tasks.map((PrepTask t) => t.toJson()).toList(),
+      };
 
-  factory PrepDay.fromJson(Map<String, dynamic> j) => PrepDay(
-        label: (j['label'] as String?) ?? '',
-        tasks: ((j['tasks'] as List<dynamic>?) ?? const <dynamic>[])
-            .map((dynamic e) => e.toString())
-            .toList(),
+  /// Tolerates the old shape, where a day's tasks were plain strings with no
+  /// dish attached — dinners planned before this change still read.
+  factory PrepDay.fromJson(Map<String, dynamic> j) {
+    final List<PrepTask> tasks = <PrepTask>[];
+    for (final dynamic t in (j['tasks'] as List<dynamic>?) ?? const <dynamic>[]) {
+      if (t is Map) {
+        tasks.add(PrepTask.fromJson(t.cast<String, dynamic>()));
+      } else {
+        tasks.add(PrepTask(text: t.toString()));
+      }
+    }
+    return PrepDay(
+      date: (j['date'] as String?) ?? '',
+      label: (j['label'] as String?) ?? '',
+      tasks: tasks,
+    );
+  }
+
+  /// "3 days before" / "The day before" / "Dinner day", worked out against
+  /// [eventDate] so it is right however the chef worded it. Falls back to
+  /// [label] when there are no dates to count between.
+  String relativeTo(String eventDate) {
+    final DateTime? d = DateTime.tryParse(date);
+    final DateTime? e = DateTime.tryParse(eventDate);
+    if (d == null || e == null) {
+      return label;
+    }
+    final int days = DateTime(e.year, e.month, e.day)
+        .difference(DateTime(d.year, d.month, d.day))
+        .inDays;
+    if (days <= 0) {
+      return 'Dinner day';
+    }
+    if (days == 1) {
+      return 'The day before';
+    }
+    return '$days days before';
+  }
+}
+
+/// One step of the dinner-day run sheet: every dish's method merged into a
+/// single order, so the whole menu can be cooked at once and land together.
+/// [offset] is minutes before serving that the step starts.
+class ServiceStep {
+  final String dish;
+  final String title;
+  final String content;
+  final int timerSeconds;
+  final int offset;
+
+  const ServiceStep({
+    required this.dish,
+    required this.title,
+    required this.content,
+    this.timerSeconds = 0,
+    this.offset = 0,
+  });
+
+  bool get hasTimer => timerSeconds > 0;
+
+  /// "2h 30m before" / "25m before" / "To serve".
+  String get whenLabel {
+    if (offset <= 0) {
+      return 'To serve';
+    }
+    if (offset < 60) {
+      return '${offset}m before';
+    }
+    final int h = offset ~/ 60;
+    final int m = offset % 60;
+    return m == 0 ? '${h}h before' : '${h}h ${m}m before';
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'dish': dish,
+        'title': title,
+        'content': content,
+        'timerSeconds': timerSeconds,
+        'offset': offset,
+      };
+
+  factory ServiceStep.fromJson(Map<String, dynamic> j) => ServiceStep(
+        dish: (j['dish'] as String?)?.trim() ?? '',
+        title: (j['title'] as String?)?.trim() ?? '',
+        content: (j['content'] as String?)?.trim() ?? '',
+        timerSeconds: (j['timerSeconds'] as num?)?.round() ?? 0,
+        offset: (j['offset'] as num?)?.round() ?? 0,
       );
 }
 
@@ -81,6 +192,10 @@ class HostEvent {
   final List<HostDish> dishes;
   final String guestNotes; // this event only — never the permanent avoid list
   final List<PrepDay> prepDays; // empty when no timeline was requested
+
+  /// The dinner-day run sheet — the whole menu as one ordered cook. Empty
+  /// for a single-dish dinner, where the dish's own recipe is the run sheet.
+  final List<ServiceStep> runSheet;
 
   /// Ticked shopping-list rows, keyed "dishIndex:ingredientIndex". Keys
   /// rather than positions because building a missing dish inserts its
@@ -97,6 +212,7 @@ class HostEvent {
     required this.dishes,
     required this.guestNotes,
     this.prepDays = const <PrepDay>[],
+    this.runSheet = const <ServiceStep>[],
     this.checked = const <String>[],
   });
 
@@ -141,6 +257,37 @@ class HostEvent {
   /// than a plan still being built.
   bool get isBuilt => dishes.isNotEmpty && recipes.length == dishes.length;
 
+  /// The prep day that is due next: today's if there is one, else the
+  /// soonest still ahead. Null when the timeline is empty or entirely past.
+  /// This is what the hub shows, so "what am I meant to be doing" is on the
+  /// screen rather than several taps into a recipe.
+  PrepDay? nextPrepDay(DateTime now) {
+    final DateTime today = DateTime(now.year, now.month, now.day);
+    PrepDay? best;
+    DateTime? bestDate;
+    for (final PrepDay p in prepDays) {
+      final DateTime? d = DateTime.tryParse(p.date);
+      if (d == null) {
+        continue;
+      }
+      final DateTime day = DateTime(d.year, d.month, d.day);
+      if (day.isBefore(today)) {
+        continue;
+      }
+      if (bestDate == null || day.isBefore(bestDate)) {
+        best = p;
+        bestDate = day;
+      }
+    }
+    // No dates at all (an older plan, or one the chef didn't date): fall back
+    // to the first day so the hub still shows something rather than nothing.
+    if (best == null && prepDays.isNotEmpty &&
+        prepDays.every((PrepDay p) => p.date.isEmpty)) {
+      return prepDays.first;
+    }
+    return best;
+  }
+
   /// [today]-relative bucket for the Hub's Upcoming/Past split. No date set
   /// counts as upcoming — it's still a live plan, just not scheduled yet.
   bool isUpcoming(DateTime today) {
@@ -156,6 +303,8 @@ class HostEvent {
     String? name,
     List<HostDish>? dishes,
     List<String>? checked,
+    List<PrepDay>? prepDays,
+    List<ServiceStep>? runSheet,
   }) =>
       HostEvent(
         createdAtMs: createdAtMs,
@@ -164,7 +313,8 @@ class HostEvent {
         eventDate: eventDate,
         dishes: dishes ?? this.dishes,
         guestNotes: guestNotes,
-        prepDays: prepDays,
+        prepDays: prepDays ?? this.prepDays,
+        runSheet: runSheet ?? this.runSheet,
         checked: checked ?? this.checked,
       );
 
@@ -176,6 +326,7 @@ class HostEvent {
         'dishes': dishes.map((HostDish d) => d.toJson()).toList(),
         'guestNotes': guestNotes,
         'prepDays': prepDays.map((PrepDay p) => p.toJson()).toList(),
+        'runSheet': runSheet.map((ServiceStep s) => s.toJson()).toList(),
         'checked': checked,
       };
 
@@ -192,6 +343,10 @@ class HostEvent {
         prepDays: ((j['prepDays'] as List<dynamic>?) ?? const <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(PrepDay.fromJson)
+            .toList(),
+        runSheet: ((j['runSheet'] as List<dynamic>?) ?? const <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(ServiceStep.fromJson)
             .toList(),
         checked: ((j['checked'] as List<dynamic>?) ?? const <dynamic>[])
             .map((dynamic e) => e.toString())

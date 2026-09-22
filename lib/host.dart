@@ -517,7 +517,9 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
   ];
   final List<String> _dishCourses = <String>['Main'];
   final TextEditingController _notesCtrl = TextEditingController();
-  bool _prepTimeline = false;
+  // On by default: a plan you have to remember to ask for is a plan you find
+  // out you needed on the day.
+  bool _prepTimeline = true;
 
   @override
   void dispose() {
@@ -605,16 +607,21 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
           : 'The chef couldn\'t write any of those — try again.');
     }
 
-    List<PrepDay> prepDays = const <PrepDay>[];
-    if (_prepTimeline) {
-      // Only the dishes that actually have a recipe can be planned around.
-      prepDays = await Chef.generateHostTimeline(
-          dishes: withRecipes
-              .where((HostDish d) => d.recipe != null)
-              .toList(),
-          guests: _guests,
-          eventDate: _eventDate);
-    }
+    // Only the dishes that actually have a recipe can be planned around.
+    final List<HostDish> cookable =
+        withRecipes.where((HostDish d) => d.recipe != null).toList();
+
+    // The plan and the run sheet are independent of each other, so they are
+    // asked for together rather than one after the other.
+    final List<Object> plans = await Future.wait(<Future<Object>>[
+      if (_prepTimeline)
+        Chef.generateHostTimeline(
+            dishes: cookable, guests: _guests, eventDate: _eventDate)
+      else
+        Future<List<PrepDay>>.value(const <PrepDay>[]),
+      Chef.generateRunSheet(dishes: cookable, guests: _guests),
+    ]);
+
     return (
       HostEvent(
         createdAtMs: DateTime.now().millisecondsSinceEpoch,
@@ -623,7 +630,8 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         eventDate: _eventDate,
         dishes: withRecipes,
         guestNotes: guestNotes,
-        prepDays: prepDays,
+        prepDays: plans[0] as List<PrepDay>,
+        runSheet: plans[1] as List<ServiceStep>,
       ),
       failed
     );
@@ -1038,6 +1046,42 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
     ));
   }
 
+  /// The whole menu as one recipe, in run-sheet order.
+  ///
+  /// A dinner is not cooked one dish at a time, but that was all this screen
+  /// offered: a recipe per dish and no way to run them together. Merging the
+  /// run sheet into a single Recipe hands the cook the existing cooking mode
+  /// — its shared timer rail already runs the oven, the pan and the rice at
+  /// once — with every step saying which dish it belongs to and how long
+  /// before serving it happens.
+  Recipe _wholeMenuRecipe() {
+    final HostEvent e = _event;
+    final String title =
+        e.name.trim().isEmpty ? 'The whole menu' : '${e.name.trim()} — the whole menu';
+    return Recipe(
+      title: title,
+      description: 'Every dish, in the order it happens, so it all lands '
+          'together.',
+      ingredients: e.allIngredients,
+      steps: <RecipeStep>[
+        for (final ServiceStep s in e.runSheet)
+          RecipeStep(
+            title: <String>[
+              s.whenLabel,
+              if (s.dish.isNotEmpty) s.dish,
+            ].join(' · '),
+            content: <String>[
+              if (s.title.isNotEmpty) s.title,
+              s.content,
+            ].join(' — '),
+            timerSeconds: s.timerSeconds,
+          ),
+      ],
+      notes: '',
+      baseServings: e.guests,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final HostEvent e = _event;
@@ -1093,7 +1137,9 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
             _costCard(total, grocery),
             const SizedBox(height: 14),
           ],
-          // The timeline leads on the counter: it's what you're following.
+          // On the counter, the two things you actually follow lead: the run
+          // sheet for the whole menu, then the day plan.
+          if (e.runSheet.isNotEmpty) _runSheetCard(e),
           if (cooking && e.prepDays.isNotEmpty) _timelineCard(e.prepDays),
           for (int i = 0; i < e.dishes.length; i++)
             e.dishes[i].recipe == null
@@ -1210,6 +1256,50 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
         ]),
       );
 
+  /// "Cook the whole menu" — the one thing that makes several dishes a
+  /// dinner instead of a pile of recipes.
+  Widget _runSheetCard(HostEvent e) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+            color: kAccent.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: kAccent.withValues(alpha: 0.45))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Text('DINNER DAY', style: labelCaps(color: kAccent)),
+          const SizedBox(height: 6),
+          Text('Cook the whole menu',
+              style: serif(size: 20, weight: FontWeight.w600, height: 1.2)),
+          const SizedBox(height: 4),
+          Text(
+              'All ${e.dishes.where((HostDish d) => d.recipe != null).length} '
+              'dishes as one run, ordered so everything lands together. '
+              'Starts ${e.runSheet.first.whenLabel.toLowerCase()}.',
+              style: TextStyle(fontSize: 13, color: kMuted, height: 1.4)),
+          const SizedBox(height: 12),
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton.icon(
+              onPressed: () => _openRecipe(_wholeMenuRecipe()),
+              icon: const Icon(Icons.local_fire_department_rounded, size: 18),
+              label: Text('Cook it all',
+                  style: serif(
+                      size: 16, weight: FontWeight.w600, color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+            ),
+          ),
+        ]),
+      );
+
+  /// The prep plan as a schedule: a day per block, each job saying which
+  /// dish it belongs to and tapping through to that recipe. This is the
+  /// answer to "what can I do three days ahead" — it should never have to be
+  /// read out of a method.
   Widget _timelineCard(List<PrepDay> days) => Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(18),
@@ -1219,24 +1309,92 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
             border: Border.all(color: kBorder)),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
           Text('Prep Timeline', style: serif(size: 17, weight: FontWeight.w600)),
-          const SizedBox(height: 10),
-          for (final PrepDay day in days) _timelineDay(day),
+          const SizedBox(height: 4),
+          Text('What to do when, so dinner day isn\'t all of it.',
+              style: TextStyle(fontSize: 12.5, color: kMuted, height: 1.4)),
+          const SizedBox(height: 14),
+          for (int i = 0; i < days.length; i++)
+            _timelineDay(days[i], last: i == days.length - 1),
         ]),
       );
 
-  Widget _timelineDay(PrepDay day) => Padding(
-        padding: const EdgeInsets.only(bottom: 10),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-          SizedBox(
-              width: 104,
-              child: Text(day.label.toUpperCase(),
-                  style: mono(size: 10.5, weight: FontWeight.w600, color: kOlive))),
-          Expanded(
-            child: Text(day.tasks.join(' · '),
-                style: TextStyle(fontSize: 13, color: kInk, height: 1.4)),
-          ),
-        ]),
-      );
+  Widget _timelineDay(PrepDay day, {bool last = false}) {
+    final String when = day.relativeTo(_event.eventDate);
+    final bool isDinnerDay = when.toLowerCase().startsWith('dinner');
+    final Color tint = isDinnerDay ? kAccent : kOlive;
+    return Padding(
+      padding: EdgeInsets.only(bottom: last ? 0 : 18),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+        // The date rail: the calendar side of the schedule.
+        SizedBox(
+          width: 86,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+            Text(when.toUpperCase(),
+                style: mono(size: 10, weight: FontWeight.w700, color: tint)),
+            if (day.date.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 3),
+              Text(displayDate(day.date),
+                  style: mono(size: 10.5, color: kFaint)),
+            ],
+          ]),
+        ),
+        Container(
+          width: 2,
+          margin: const EdgeInsets.only(right: 14, top: 3),
+          height: (day.tasks.length * 30).toDouble().clamp(24, 400),
+          color: tint.withValues(alpha: 0.28),
+        ),
+        Expanded(
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+            for (final PrepTask t in day.tasks) _timelineTask(t),
+          ]),
+        ),
+      ]),
+    );
+  }
+
+  Widget _timelineTask(PrepTask t) {
+    final Recipe? r = _recipeFor(t.dish);
+    final Widget body = Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(t.text,
+              style: TextStyle(fontSize: 13.5, color: kInk, height: 1.4)),
+          if (t.dish.isNotEmpty)
+            Text(t.dish,
+                style: mono(size: 10, color: r == null ? kFaint : kAccent)),
+        ]);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: r == null
+          ? body
+          : InkWell(
+              onTap: () => _openRecipe(r),
+              borderRadius: BorderRadius.circular(8),
+              child: body,
+            ),
+    );
+  }
+
+  /// The recipe a timeline task belongs to, matched on the dish title the
+  /// chef used. Null when it named something that isn't on the menu.
+  Recipe? _recipeFor(String dish) {
+    if (dish.trim().isEmpty) {
+      return null;
+    }
+    final String want = dish.trim().toLowerCase();
+    for (final HostDish d in _event.dishes) {
+      final Recipe? r = d.recipe;
+      if (r == null) {
+        continue;
+      }
+      if (r.title.trim().toLowerCase() == want ||
+          d.text.trim().toLowerCase() == want) {
+        return r;
+      }
+    }
+    return null;
+  }
 
   Widget _shoppingCard() => Container(
         padding: const EdgeInsets.all(18),

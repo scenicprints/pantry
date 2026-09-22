@@ -926,51 +926,173 @@ tips — no health commentary, this dish isn't being judged against a diet.''';
     return Recipe.fromJson(data, baseServings: guests);
   }
 
-  /// A short day-by-day prep plan working back from the dinner date. Empty
-  /// list on any failure — the menu still stands without it.
+  /// Every dish written out in full — title, course, and the numbered method.
+  ///
+  /// The timeline and the run sheet BOTH need the actual steps. Handing them
+  /// only the titles and the notes was the whole problem: "the sauce keeps
+  /// three days" is a sentence inside step 4, so a planner that never sees
+  /// step 4 is guessing, and the cook is left reading every recipe to find
+  /// out what he could have done on Thursday.
+  static String _menuInFull(List<HostDish> dishes) {
+    final StringBuffer sb = StringBuffer();
+    for (final HostDish d in dishes) {
+      final Recipe? r = d.recipe;
+      if (r == null) {
+        continue;
+      }
+      sb.writeln('### ${d.course}: ${r.title}');
+      if (r.notes.isNotEmpty) {
+        sb.writeln('Notes: ${r.notes}');
+      }
+      for (int i = 0; i < r.steps.length; i++) {
+        final RecipeStep s = r.steps[i];
+        sb.writeln('${i + 1}. ${s.title.isEmpty ? '' : '${s.title} — '}'
+            '${s.content}'
+            '${s.timerSeconds > 0 ? ' [${(s.timerSeconds / 60).round()} min]' : ''}');
+      }
+      sb.writeln();
+    }
+    return sb.toString().trimRight();
+  }
+
+  /// A dated, day-by-day prep plan working back from the dinner. Empty list
+  /// on any failure — the menu still stands without it.
   static Future<List<PrepDay>> generateHostTimeline({
     required List<HostDish> dishes,
     required int guests,
     required String eventDate,
   }) async {
+    final List<HostDish> built =
+        dishes.where((HostDish d) => d.recipe != null).toList();
+    if (built.isEmpty) {
+      return const <PrepDay>[];
+    }
     final DateTime today = DateTime.now();
     final DateTime? event =
         eventDate.isEmpty ? null : DateTime.tryParse(eventDate);
-    final String dishList = dishes
-        .where((HostDish d) => d.text.trim().isNotEmpty)
-        .map((HostDish d) {
-      final String notes = d.recipe?.notes ?? '';
-      return '- ${d.course}: ${d.text}${notes.isEmpty ? '' : ' — $notes'}';
-    }).join('\n');
     final String user = '''
-Today is ${_dateStr(today)}. The dinner is ${event == null ? '(no date set — assume it is soon)' : 'on ${_dateStr(event)}'}, for $guests ${guests == 1 ? 'guest' : 'guests'}. Here is the menu:
-$dishList
+Today is ${_dateStr(today)} (${_iso(today)}). The dinner is ${event == null ? '(no date set — assume it is three days from today)' : 'on ${_dateStr(event)} (${_iso(event)})'}, for $guests ${guests == 1 ? 'guest' : 'guests'}.
 
-Write a short day-by-day PREP TIMELINE working backward from the dinner date,
-so the host isn't doing everything the day of. Only plan the days that
-actually matter for make-ahead cooking (usually the last 1 to 3 days before,
-plus the day of) — do not pad it out with empty early days. Each day's tasks
-should be a handful of short, concrete lines (e.g. "Braise the short ribs;
-refrigerate the sauce"), not full recipe steps. The DAY OF should cover final
-cooking, reheating, and plating order. A dish that needs no make-ahead prep
-only shows up on the day-of list.
+THE MENU, IN FULL — every dish with its method:
+$menuPlaceholder
+
+Work out the PREP TIMELINE: what the host should do on which day, counting
+back from the dinner.
+
+READ THE METHODS AND PULL THE MAKE-AHEAD WORK OUT OF THEM. This is the whole
+job. Anything a step says can be done in advance, or that plainly keeps —
+a braise, a stock, a sauce, a dough, a marinade, a cure, a compound butter,
+a dressing, something that wants to chill or rest overnight, vegetables that
+can be cut the day before — becomes a task on the day it should be done,
+with how it is stored until it is wanted. The host should never have to read
+a recipe to find out what he could have done on Thursday.
+
+Rules:
+- Only days that carry real work. Never pad the plan with empty days, and
+  never invent prep a dish does not need.
+- Do not schedule something ahead that will be worse for it. Anything that
+  has to be fresh — a salad dressed, fish cooked, something fried or seared —
+  stays on dinner day and says so.
+- Dinner day carries the rest: what comes out of the fridge when, what goes
+  in the oven when, reheating, and the order things are plated.
+- Each task is one short line a busy host can read at a glance, and names
+  the dish it belongs to.
+- Nothing in the methods may be silently dropped: every dish should appear
+  somewhere in the plan.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"days":[{"label":"","tasks":[""]}]}
-"label" is short, e.g. "Thu, Oct 1 — 2 days before" or "Sat, Oct 3 — day of".''';
+{"days":[{"date":"YYYY-MM-DD","label":"","tasks":[{"text":"","dish":""}]}]}
+"date" is the real calendar date for that day, between today and the dinner
+inclusive. "label" is short, e.g. "Two days before" or "Dinner day". "dish"
+is the exact dish title from the menu above, or "" for a job that belongs to
+the dinner rather than to one dish.'''
+        .replaceFirst(menuPlaceholder, _menuInFull(built));
 
     try {
       final Map<String, dynamic> data = await _post(
-          user: user, maxTokens: 1200, system: _hostTimelineSystemPrompt);
+          user: user, maxTokens: 2000, system: _hostTimelineSystemPrompt);
       final List<dynamic> days = (data['days'] as List<dynamic>?) ?? <dynamic>[];
       return days
           .whereType<Map<String, dynamic>>()
           .map((Map<String, dynamic> j) => PrepDay.fromJson(j))
+          .where((PrepDay p) => p.tasks.isNotEmpty)
           .toList();
     } on ChefException {
       return const <PrepDay>[];
     }
   }
+
+  /// The dinner-day RUN SHEET: every dish's method merged into one ordered
+  /// sequence, so several dishes can be cooked at once and land together.
+  ///
+  /// Without this a menu is a pile of separate recipes and the cook can only
+  /// follow one at a time — which is not how a dinner is cooked.
+  static Future<List<ServiceStep>> generateRunSheet({
+    required List<HostDish> dishes,
+    required int guests,
+  }) async {
+    final List<HostDish> built =
+        dishes.where((HostDish d) => d.recipe != null).toList();
+    if (built.length < 2) {
+      return const <ServiceStep>[]; // one dish is just its own recipe
+    }
+    final String equipment = formatEquipment(await ChefKeys.getEquipment());
+    final String user = '''
+Cooking for $guests ${guests == 1 ? 'guest' : 'guests'}. Here is the whole
+menu, each dish with its own method:
+
+$menuPlaceholder
+
+EQUIPMENT — the only appliances in this kitchen. Two things cannot be in the
+oven at different temperatures at the same time, and one pan is one pan:
+$equipment
+
+Merge these into ONE RUN SHEET for dinner day: a single ordered list of
+steps that cooks the whole menu so that everything is ready together.
+
+This is a scheduling job, not a rewrite:
+- Keep each step's own wording and its timing. You are ordering the work,
+  not inventing new cooking.
+- Start with what takes longest and can sit, end with what must be fresh.
+- Interleave: while something braises or bakes, the cook is doing the next
+  dish's prep. Say what goes on during a long wait.
+- Respect the equipment. If two dishes want the oven at different
+  temperatures, sequence them, and say which one is resting or holding.
+- Say when something comes out to rest, and put the last-minute jobs — the
+  sear, the dressing, the reheat, the plating — at the end in the order they
+  happen.
+- "offset" is how many minutes BEFORE serving that step starts, counting
+  down (e.g. 150 for two and a half hours ahead, 0 for plating). Make them
+  consistent with the step times.
+- Every dish must appear. Nothing in any method may be dropped.
+
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"steps":[{"dish":"","title":"","content":"","timerSeconds":0,"offset":0}]}
+"dish" is the exact dish title from the menu above. "timerSeconds" is the
+seconds for any wait/cook/rest in that step, 0 when there is none.''';
+
+    try {
+      final Map<String, dynamic> data = await _post(
+          user: user,
+          maxTokens: 3000,
+          system: _hostTimelineSystemPrompt);
+      final List<dynamic> steps = (data['steps'] as List<dynamic>?) ?? <dynamic>[];
+      return steps
+          .whereType<Map<String, dynamic>>()
+          .map((Map<String, dynamic> j) => ServiceStep.fromJson(j))
+          .where((ServiceStep s) => s.content.isNotEmpty)
+          .toList();
+    } on ChefException {
+      return const <ServiceStep>[];
+    }
+  }
+
+  /// Placeholder swapped for the menu, so the prompt can be a plain string
+  /// literal without the method text fighting its interpolation.
+  static const String menuPlaceholder = '<<<MENU>>>';
+
+  static String _iso(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
   static List<String> _splitGuestNotes(String notes) => notes
       .split(RegExp(r'[,;]|\band\b'))

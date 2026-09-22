@@ -46,6 +46,7 @@ HostEvent _dinner({
   bool built = true,
   List<String> checked = const <String>[],
   List<PrepDay> prepDays = const <PrepDay>[],
+  List<ServiceStep> runSheet = const <ServiceStep>[],
 }) =>
     HostEvent(
       createdAtMs: 1000,
@@ -55,6 +56,7 @@ HostEvent _dinner({
       guestNotes: 'one guest has a tree-nut allergy',
       checked: checked,
       prepDays: prepDays,
+      runSheet: runSheet,
       dishes: <HostDish>[
         HostDish(
             text: 'Lasagna',
@@ -230,7 +232,9 @@ void main() {
           t,
           kIpad,
           _dinner(prepDays: const <PrepDay>[
-            PrepDay(label: 'Fri — 1 day before', tasks: <String>['Braise'])
+            PrepDay(label: 'The day before', tasks: <PrepTask>[
+              PrepTask(text: 'Braise the short ribs', dish: 'Lasagna'),
+            ])
           ]));
       expect(find.text('Shopping List'), findsNothing);
       expect(find.text('NAME THIS DINNER'), findsNothing);
@@ -239,6 +243,66 @@ void main() {
       expect(find.text('Prep Timeline'), findsOneWidget);
       expect(find.text('Braised Short Rib Lasagna'), findsOneWidget);
       expect(find.text('View full recipe'), findsWidgets);
+    });
+
+    testWidgets('the whole menu can be cooked at once, not a dish at a time',
+        (WidgetTester t) async {
+      await _pumpResults(
+          t,
+          kPhone,
+          _dinner(runSheet: const <ServiceStep>[
+            ServiceStep(
+                dish: 'Braised Short Rib Lasagna',
+                title: 'Braise',
+                content: 'Into the oven',
+                timerSeconds: 9000,
+                offset: 150),
+            ServiceStep(
+                dish: 'Charred Broccolini',
+                title: 'Sear',
+                content: 'Hot pan',
+                offset: 10),
+          ]));
+      expect(find.text('Cook the whole menu'), findsOneWidget);
+      expect(find.text('Cook it all'), findsOneWidget);
+
+      await t.tap(find.text('Cook it all'));
+      await t.pumpAndSettle();
+      // One recipe covering every dish, each step saying which it belongs to
+      // and how long before serving it happens.
+      expect(find.textContaining('the whole menu'), findsWidgets);
+      expect(find.textContaining('2h 30m before'), findsWidgets);
+      // The second dish's step is further down the same single method.
+      for (int i = 0; i < 6 && !find.textContaining('Charred Broccolini').hasFound; i++) {
+        await t.drag(find.byType(Scrollable).first, const Offset(0, -500));
+        await t.pump();
+      }
+      expect(find.textContaining('Charred Broccolini'), findsWidgets);
+    });
+
+    testWidgets('one dish alone gets no run sheet', (WidgetTester t) async {
+      await _pumpResults(t, kPhone, _dinner());
+      expect(find.text('Cook the whole menu'), findsNothing);
+    });
+
+    testWidgets('make-ahead work reads as a schedule, by day and by dish',
+        (WidgetTester t) async {
+      await _pumpResults(
+          t,
+          kPhone,
+          _dinner(days: 3, prepDays: <PrepDay>[
+            PrepDay(date: _isoIn(1), label: 'whatever', tasks: const <PrepTask>[
+              PrepTask(
+                  text: 'Braise the short ribs; refrigerate the sauce',
+                  dish: 'Braised Short Rib Lasagna'),
+            ]),
+          ]));
+      // The day is labelled against the dinner, not by the chef's wording,
+      // and the dish it belongs to is on the row.
+      expect(find.text('2 DAYS BEFORE'), findsOneWidget);
+      expect(find.text('Braise the short ribs; refrigerate the sauce'),
+          findsOneWidget);
+      expect(find.text('Braised Short Rib Lasagna'), findsWidgets);
     });
 
     testWidgets('an unbuilt dish offers a rebuild on the phone only',

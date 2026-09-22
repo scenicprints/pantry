@@ -147,7 +147,12 @@ void main() {
         dishes: <HostDish>[_d('Lasagna', 'Main', recipe: _r('Lasagna'))],
         guestNotes: 'one guest has a tree-nut allergy',
         prepDays: const <PrepDay>[
-          PrepDay(label: 'Fri — 1 day before', tasks: <String>['Assemble the lasagna']),
+          PrepDay(
+              date: '2026-10-02',
+              label: 'The day before',
+              tasks: <PrepTask>[
+                PrepTask(text: 'Assemble the lasagna', dish: 'Lasagna'),
+              ]),
         ],
       );
       final HostEvent back = HostEvent.fromJson(e.toJson());
@@ -157,8 +162,10 @@ void main() {
       expect(back.eventDate, '2026-10-03');
       expect(back.guestNotes, 'one guest has a tree-nut allergy');
       expect(back.dishes.single.recipe?.title, 'Lasagna');
-      expect(back.prepDays.single.label, 'Fri — 1 day before');
-      expect(back.prepDays.single.tasks, <String>['Assemble the lasagna']);
+      expect(back.prepDays.single.label, 'The day before');
+      expect(back.prepDays.single.tasks.single.text, 'Assemble the lasagna');
+      expect(back.prepDays.single.tasks.single.dish, 'Lasagna');
+      expect(back.prepDays.single.relativeTo('2026-10-03'), 'The day before');
     });
   });
 
