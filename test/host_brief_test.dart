@@ -74,6 +74,58 @@ void main() {
     });
   });
 
+  group('Pasting what another Claude handed back', () {
+    const String bare = '{"name":"Friendsgiving","guests":8,'
+        '"eventDate":"2026-11-26","dishes":[{"text":"Turkey","course":"Main",'
+        '"notes":"Spatchcocked"}]}';
+
+    test('a bare brief object', () {
+      final HostBrief? b = parseBrief(bare);
+      expect(b?.name, 'Friendsgiving');
+      expect(b?.guests, 8);
+      expect(b?.dishes.single.notes, 'Spatchcocked');
+    });
+
+    test('still fenced, the way a chat hands it over', () {
+      expect(parseBrief('```json\n$bare\n```')?.name, 'Friendsgiving');
+      expect(parseBrief('```\n$bare\n```')?.name, 'Friendsgiving');
+    });
+
+    test('with prose around it', () {
+      final HostBrief? b = parseBrief(
+          'Here you go — paste this into Pantry:\n\n$bare\n\nHave a good one!');
+      expect(b?.name, 'Friendsgiving');
+    });
+
+    test('the wrapper, or a bare array', () {
+      expect(parseBrief('{"briefs":[$bare]}')?.name, 'Friendsgiving');
+      expect(parseBrief('[$bare]')?.name, 'Friendsgiving');
+    });
+
+    test('a wrapper whose brief is already built is not offered again', () {
+      final String built = bare.replaceFirst(
+          '{"name"', '{"builtAtMs":1700000000000,"name"');
+      expect(parseBrief('{"briefs":[$built]}'), isNull);
+    });
+
+    test('an id is invented when the paste has none, so two can coexist', () {
+      final HostBrief? a =
+          parseBrief(bare, now: DateTime.fromMillisecondsSinceEpoch(1000));
+      final HostBrief? c =
+          parseBrief(bare, now: DateTime.fromMillisecondsSinceEpoch(2000));
+      expect(a!.id, '1000');
+      expect(c!.id, '2000');
+    });
+
+    test('nonsense comes back null rather than half a dinner', () {
+      expect(parseBrief(''), isNull);
+      expect(parseBrief('sure, I can help with that'), isNull);
+      expect(parseBrief('{"name":"No dishes","guests":4}'), isNull);
+      expect(parseBrief('{"dishes":[]}'), isNull);
+      expect(parseBrief('{"name":"truncated","dishes":[{'), isNull);
+    });
+  });
+
   group('A brief on screen', () {
     Future<void> pump(WidgetTester t, HostBrief b) async {
       GoogleFonts.config.allowRuntimeFetching = false;

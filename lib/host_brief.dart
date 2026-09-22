@@ -126,6 +126,92 @@ class HostBrief {
       );
 }
 
+/// Read a brief out of whatever a Claude that has no tools handed back.
+///
+/// Not every Claude can write to the data repo — the one on a phone or in a
+/// browser can only give you text. So the app accepts the JSON directly:
+/// pasted with its code fence still on, wrapped in {"briefs":[…]}, as a bare
+/// array, or as one brief on its own. Anything it can't read comes back null
+/// rather than half a dinner.
+HostBrief? parseBrief(String raw, {DateTime? now}) {
+  String s = raw.trim();
+  if (s.isEmpty) {
+    return null;
+  }
+  // ```json … ``` — a fence is the normal way a chat hands over JSON.
+  if (s.startsWith('```')) {
+    final int nl = s.indexOf('\n');
+    if (nl > 0) {
+      s = s.substring(nl + 1);
+    }
+    final int fence = s.lastIndexOf('```');
+    if (fence > 0) {
+      s = s.substring(0, fence);
+    }
+    s = s.trim();
+  }
+  dynamic d = _tryDecode(s);
+  if (d == null) {
+    // Prose around the JSON: take from the first bracket to the last.
+    final int start = <int>[s.indexOf('{'), s.indexOf('[')]
+        .where((int i) => i >= 0)
+        .fold(-1, (int a, int b) => a < 0 ? b : (b < a ? b : a));
+    final int end = <int>[s.lastIndexOf('}'), s.lastIndexOf(']')]
+        .fold(-1, (int a, int b) => b > a ? b : a);
+    if (start < 0 || end <= start) {
+      return null;
+    }
+    d = _tryDecode(s.substring(start, end + 1));
+    if (d == null) {
+      return null;
+    }
+  }
+
+  Map<String, dynamic>? one;
+  if (d is Map<String, dynamic>) {
+    if (d['dishes'] is List) {
+      one = d;
+    } else if (d['briefs'] is List) {
+      one = (d['briefs'] as List<dynamic>)
+          .whereType<Map<String, dynamic>>()
+          .where((Map<String, dynamic> m) =>
+              ((m['builtAtMs'] as num?)?.round() ?? 0) == 0)
+          .firstOrNull;
+    }
+  } else if (d is List) {
+    one = d.whereType<Map<String, dynamic>>().firstOrNull;
+  }
+  if (one == null) {
+    return null;
+  }
+
+  final HostBrief b = HostBrief.fromJson(one);
+  if (b.dishes.isEmpty) {
+    return null;
+  }
+  // A pasted brief usually has no id of its own; give it one so it can't
+  // collide with another.
+  return b.createdAtMs > 0
+      ? b
+      : HostBrief(
+          createdAtMs: (now ?? DateTime.now()).millisecondsSinceEpoch,
+          name: b.name,
+          guests: b.guests,
+          eventDate: b.eventDate,
+          dishes: b.dishes,
+          guestNotes: b.guestNotes,
+          notes: b.notes,
+        );
+}
+
+dynamic _tryDecode(String s) {
+  try {
+    return jsonDecode(s);
+  } catch (_) {
+    return null;
+  }
+}
+
 /// Reads and writes `host_brief.json`.
 ///
 /// Simpler than the other syncs on purpose: a brief is written from outside

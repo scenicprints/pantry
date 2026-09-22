@@ -191,6 +191,17 @@ class _HostHubScreenState extends State<HostHubScreen> {
     }
   }
 
+  void _openPaste(BuildContext context) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => HostPasteScreen(
+        onRead: (HostBrief b) {
+          setState(() => _briefs = <HostBrief>[b, ..._briefs]);
+          _openBrief(context, b);
+        },
+      ),
+    ));
+  }
+
   void _openBrief(BuildContext context, HostBrief b) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => HostBriefScreen(
@@ -313,6 +324,17 @@ class _HostHubScreenState extends State<HostHubScreen> {
                         borderRadius: BorderRadius.circular(14))),
               ),
             ),
+          if (!cooking) ...<Widget>[
+            const SizedBox(height: 10),
+            Center(
+              child: TextButton.icon(
+                onPressed: () => _openPaste(context),
+                icon: const Icon(Icons.content_paste_rounded, size: 16),
+                label: const Text('Paste a plan from Claude'),
+                style: TextButton.styleFrom(foregroundColor: kMuted),
+              ),
+            ),
+          ],
           if (rest.isNotEmpty) ...<Widget>[
             const SizedBox(height: 26),
             Text('ALSO COMING UP', style: labelCaps(color: kAccent)),
@@ -1011,6 +1033,109 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
               child: Icon(icon, size: 20, color: filled ? Colors.white : kInk)),
         ),
       );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// PASTE A PLAN — for a Claude that can't reach the data repo.
+//
+// A Claude Code session on the desktop can write host_brief.json itself. The
+// one on a phone or in a browser can only hand back text, so the app takes
+// the text.
+// ═══════════════════════════════════════════════════════════════════════
+
+class HostPasteScreen extends StatefulWidget {
+  final void Function(HostBrief brief) onRead;
+  const HostPasteScreen({super.key, required this.onRead});
+
+  @override
+  State<HostPasteScreen> createState() => _HostPasteScreenState();
+}
+
+class _HostPasteScreenState extends State<HostPasteScreen> {
+  final TextEditingController _ctrl = TextEditingController();
+  String _error = '';
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _read() {
+    final HostBrief? b = parseBrief(_ctrl.text);
+    if (b == null) {
+      setState(() => _error =
+          'Couldn\'t read a dinner in that. It needs the JSON Claude gives '
+          'you — guests, a date, and a list of dishes.');
+      return;
+    }
+    widget.onRead(b);
+    Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double bottomPad = 32 + MediaQuery.of(context).viewPadding.bottom;
+    return Scaffold(
+      appBar: AppBar(title: Text('Paste a plan', style: serif(size: 20))),
+      body: ListView(
+        padding: pagePadding(context, top: 4, bottom: bottomPad),
+        children: <Widget>[
+          Text(
+              'Worked a dinner out with Claude somewhere it can\'t reach your '
+              'data? Paste what it gave you here.',
+              style: TextStyle(color: kMuted, fontSize: 13.5, height: 1.45)),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _ctrl,
+            minLines: 8,
+            maxLines: 20,
+            autofocus: true,
+            style: mono(size: 12, color: kInk),
+            decoration: InputDecoration(
+              hintText: '{"name": "Sarah\'s Birthday", "guests": 6, …}',
+              hintStyle: mono(size: 12, color: kFaint),
+              filled: true,
+              fillColor: kInset,
+              contentPadding: const EdgeInsets.all(14),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide.none),
+            ),
+          ),
+          if (_error.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                  color: kWarn.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: kWarn.withValues(alpha: 0.5))),
+              child: Text(_error,
+                  style: TextStyle(fontSize: 13, color: kInk, height: 1.4)),
+            ),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            height: 54,
+            child: ElevatedButton.icon(
+              onPressed: _read,
+              icon: const Icon(Icons.content_paste_go_rounded, size: 18),
+              label: Text('Read it',
+                  style: serif(
+                      size: 16, weight: FontWeight.w600, color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
