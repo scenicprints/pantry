@@ -9,6 +9,7 @@ import 'chef_sync.dart';
 import 'cook_timers.dart';
 import 'cook_session.dart';
 import 'host.dart';
+import 'host_brief.dart';
 import 'host_hub.dart';
 import 'menu_sync.dart';
 import 'cooked_handoff.dart';
@@ -52,6 +53,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   List<PlannedMeal> _planned = <PlannedMeal>[];
   RecipeBox _box = const RecipeBox();
   HostHubBox _hostHub = const HostHubBox();
+  List<HostBrief> _briefs = <HostBrief>[];
   bool _hasKey = false;
 
   @override
@@ -98,14 +100,31 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   }
 
   /// A dinner planned on the phone has to be on the iPad at the counter, same
-  /// as "On the menu" — pulled on the same beats, open and resume.
+  /// as "On the menu" — pulled on the same beats, open and resume. Dinners
+  /// worked out in Claude arrive on the same beats too.
   Future<void> _syncHostHub() async {
     final List<HostEvent>? merged = await HostHubSync.pull(_hostHub.events);
-    if (merged == null || !mounted) {
+    if (merged != null && mounted) {
+      setState(() => _hostHub = HostHubBox(merged));
+      LocalCache.saveHostHub(_hostHub.encode());
+    }
+    final List<HostBrief>? briefs = await HostBriefSync.pull();
+    if (briefs == null || !mounted) {
       return;
     }
-    setState(() => _hostHub = HostHubBox(merged));
-    LocalCache.saveHostHub(_hostHub.encode());
+    final List<HostBrief> waiting =
+        briefs.where((HostBrief b) => !b.isBuilt).toList()
+          ..sort((HostBrief a, HostBrief b) =>
+              b.createdAtMs.compareTo(a.createdAtMs));
+    setState(() => _briefs = waiting);
+  }
+
+  /// A brief has become a dinner — stamp it so it stops waiting. Local first
+  /// so the hub updates whether or not the write lands.
+  void _markBriefBuilt(HostBrief b) {
+    setState(() =>
+        _briefs = _briefs.where((HostBrief x) => x.id != b.id).toList());
+    HostBriefSync.markBuilt(b).catchError((Object _) => false);
   }
 
   void _markCooked(String title) {
@@ -153,10 +172,12 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => HostHubScreen(
         events: _hostHub.sorted,
+        briefs: _briefs,
         items: widget.items,
         prices: widget.prices,
         onSave: _saveHostEvent,
         onRemove: _removeHostEvent,
+        onBriefBuilt: _markBriefBuilt,
         onSaveRecipe: _saveRecipe,
         onUse: widget.onUse,
       ),
@@ -508,7 +529,11 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
           child: OutlinedButton.icon(
             onPressed: _hasKey ? _openHostHub : null,
             icon: const Icon(Icons.groups_rounded),
-            label: Text('Host Hub',
+            // A dinner from Claude is waiting on him, so the door says so.
+            label: Text(
+                _briefs.isEmpty
+                    ? 'Host Hub'
+                    : 'Host Hub · ${_briefs.length} waiting',
                 style: serif(
                     size: 17,
                     weight: FontWeight.w600,

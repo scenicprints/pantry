@@ -35,20 +35,36 @@ class HostDish {
   final String course; // one of kHostCourses
   final Recipe? recipe;
 
-  const HostDish({required this.text, required this.course, this.recipe});
+  /// What was asked for about this dish — "short rib, not mince", "no cream
+  /// sauce". Kept with the dish rather than spent on the one call that wrote
+  /// it, so rebuilding the dish later still honours it.
+  final String notes;
 
-  HostDish copyWith({Recipe? recipe}) =>
-      HostDish(text: text, course: course, recipe: recipe ?? this.recipe);
+  const HostDish({
+    required this.text,
+    required this.course,
+    this.recipe,
+    this.notes = '',
+  });
+
+  HostDish copyWith({Recipe? recipe}) => HostDish(
+        text: text,
+        course: course,
+        recipe: recipe ?? this.recipe,
+        notes: notes,
+      );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
         'text': text,
         'course': course,
+        if (notes.isNotEmpty) 'notes': notes,
         if (recipe != null) 'recipe': recipe!.toJson(),
       };
 
   factory HostDish.fromJson(Map<String, dynamic> j) => HostDish(
         text: (j['text'] as String?) ?? '',
         course: (j['course'] as String?) ?? 'Main',
+        notes: (j['notes'] as String?) ?? '',
         recipe: j['recipe'] is Map
             ? Recipe.fromStored((j['recipe'] as Map).cast<String, dynamic>())
             : null,

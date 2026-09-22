@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'chef.dart';
 import 'chef_models.dart';
 import 'cook.dart' show money, withSpinner, RecipeScreen;
+import 'host_brief.dart';
 import 'host_hub.dart';
 import 'models.dart';
 import 'pricebook.dart';
@@ -32,6 +33,92 @@ const List<String> _kMonths = <String>[
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
+/// Build a menu: a recipe per dish, then the prep timeline and the run
+/// sheet. Returns the finished dinner and the names of any dishes the chef
+/// couldn't write.
+///
+/// Shared by the form on this device and by a brief written in Claude, so
+/// both arrive at the same dinner by the same path — the chef does the
+/// cooking either way, and the only difference is how the ask reached it.
+///
+/// Failures are caught PER DISH. One dish hitting a rate limit used to throw
+/// away every recipe that had already come back — minutes of waiting and
+/// real money, gone.
+Future<(HostEvent, List<String>)> buildHostMenu({
+  required List<HostDish> input,
+  required int guests,
+  required String eventDate,
+  required String name,
+  required String guestNotes,
+  required String dinnerNotes,
+  required bool prepTimeline,
+  required List<PantryItem> pantry,
+  required PriceBook prices,
+}) async {
+  if (input.isEmpty) {
+    throw ChefException('Add at least one dish first.');
+  }
+  final List<Recipe?> recipes = await Future.wait(input.map((HostDish d) async {
+    try {
+      return await Chef.generateHostDish(
+        dish: d.text,
+        course: d.course,
+        guests: guests,
+        pantry: pantry,
+        prices: prices,
+        guestNotes: guestNotes,
+        dishNotes: d.notes,
+        dinnerNotes: dinnerNotes,
+      );
+    } on ChefException {
+      return null;
+    }
+  }));
+
+  final List<HostDish> withRecipes = <HostDish>[];
+  final List<String> failed = <String>[];
+  for (int i = 0; i < input.length; i++) {
+    final Recipe? r = recipes[i];
+    withRecipes.add(r == null ? input[i] : input[i].copyWith(recipe: r));
+    if (r == null) {
+      failed.add(input[i].text);
+    }
+  }
+  if (failed.length == input.length) {
+    throw ChefException(input.length == 1
+        ? 'The chef couldn\'t write that one — try again.'
+        : 'The chef couldn\'t write any of those — try again.');
+  }
+
+  final List<HostDish> cookable =
+      withRecipes.where((HostDish d) => d.recipe != null).toList();
+
+  // The plan and the run sheet don't depend on each other, so they're asked
+  // for together rather than one after the other.
+  final List<Object> plans = await Future.wait(<Future<Object>>[
+    if (prepTimeline)
+      Chef.generateHostTimeline(
+          dishes: cookable, guests: guests, eventDate: eventDate)
+    else
+      Future<List<PrepDay>>.value(const <PrepDay>[]),
+    Chef.generateRunSheet(dishes: cookable, guests: guests),
+  ]);
+
+  return (
+    HostEvent(
+      createdAtMs: DateTime.now().millisecondsSinceEpoch,
+      name: name,
+      guests: guests,
+      eventDate: eventDate,
+      dishes: withRecipes,
+      guestNotes: guestNotes,
+      prepDays: plans[0] as List<PrepDay>,
+      runSheet: plans[1] as List<ServiceStep>,
+    ),
+    failed
+  );
+}
+
 /// The iPad is a cooking surface, not a second copy of the app (IOS.md).
 /// Planning a dinner and running the shop stay on the phone; here Host Hub
 /// shows only what you need standing at the counter — the menu, the prep
@@ -56,20 +143,24 @@ String displayDate(String iso) {
 
 class HostHubScreen extends StatefulWidget {
   final List<HostEvent> events; // pre-sorted: upcoming first, then past
+  final List<HostBrief> briefs; // waiting to be built, newest first
   final List<PantryItem> items;
   final PriceBook prices;
   final void Function(HostEvent event) onSave;
   final void Function(HostEvent event) onRemove;
+  final void Function(HostBrief brief)? onBriefBuilt;
   final void Function(Recipe recipe, int servings)? onSaveRecipe;
   final void Function(PantryItem item, double grams)? onUse;
 
   const HostHubScreen({
     super.key,
     required this.events,
+    this.briefs = const <HostBrief>[],
     required this.items,
     required this.prices,
     required this.onSave,
     required this.onRemove,
+    this.onBriefBuilt,
     this.onSaveRecipe,
     this.onUse,
   });
@@ -84,6 +175,7 @@ class HostHubScreen extends StatefulWidget {
 /// back — a dinner you just built missing from the hub that built it.
 class _HostHubScreenState extends State<HostHubScreen> {
   late List<HostEvent> _events = widget.events;
+  late List<HostBrief> _briefs = widget.briefs;
 
   /// A `late` field initialises once, so a rebuild carrying a different list
   /// would have gone on showing the first one — the same staleness this
@@ -94,6 +186,28 @@ class _HostHubScreenState extends State<HostHubScreen> {
     if (!identical(old.events, widget.events)) {
       _events = widget.events;
     }
+    if (!identical(old.briefs, widget.briefs)) {
+      _briefs = widget.briefs;
+    }
+  }
+
+  void _openBrief(BuildContext context, HostBrief b) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => HostBriefScreen(
+        brief: b,
+        items: widget.items,
+        prices: widget.prices,
+        onSave: _handleSave,
+        onRemove: _handleRemove,
+        onBuilt: (HostBrief built) {
+          widget.onBriefBuilt?.call(built);
+          setState(() =>
+              _briefs = _briefs.where((HostBrief x) => x.id != built.id).toList());
+        },
+        onSaveRecipe: widget.onSaveRecipe,
+        onUse: widget.onUse,
+      ),
+    ));
   }
 
   void _handleSave(HostEvent e) {
@@ -160,6 +274,14 @@ class _HostHubScreenState extends State<HostHubScreen> {
       body: ListView(
         padding: pagePadding(context, top: 4, bottom: bottomPad),
         children: <Widget>[
+          // A plan that arrived from Claude leads — it's waiting on you, and
+          // nothing else on this screen is.
+          if (_briefs.isNotEmpty && !cooking) ...<Widget>[
+            Text('WAITING TO BE BUILT', style: labelCaps(color: kOlive)),
+            const SizedBox(height: 10),
+            for (final HostBrief b in _briefs) _briefCard(context, b),
+            const SizedBox(height: 18),
+          ],
           if (next != null) ...<Widget>[
             _nextCard(context, next, now, cooking),
             const SizedBox(height: 18),
@@ -207,6 +329,45 @@ class _HostHubScreenState extends State<HostHubScreen> {
       ),
     );
   }
+
+  /// A dinner worked out in Claude, sitting in the app waiting for the chef
+  /// to cook from it.
+  Widget _briefCard(BuildContext context, HostBrief b) => Material(
+        color: kOlive.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _openBrief(context, b),
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: kOlive.withValues(alpha: 0.45))),
+            child: Row(children: <Widget>[
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+                  Text(b.name.isEmpty ? 'A dinner from Claude' : b.name,
+                      style: serif(size: 17, weight: FontWeight.w600, height: 1.2)),
+                  const SizedBox(height: 5),
+                  Text(
+                      <String>[
+                        '${b.guests} ${b.guests == 1 ? 'guest' : 'guests'}',
+                        if (b.eventDate.isNotEmpty) displayDate(b.eventDate),
+                        '${b.dishes.length} dish${b.dishes.length == 1 ? '' : 'es'}',
+                      ].join(' · '),
+                      style: mono(size: 10.5, color: kMuted)),
+                  const SizedBox(height: 7),
+                  Text('Tap to have the chef build it',
+                      style: mono(
+                          size: 10.5, weight: FontWeight.w600, color: kOlive)),
+                ]),
+              ),
+              const Icon(Icons.chevron_right_rounded, color: kMuted),
+            ]),
+          ),
+        ),
+      );
 
   /// The hero: the dinner you're actually cooking next, with everything you'd
   /// want to know at a glance — how long you've got, what's on the menu, what
@@ -558,84 +719,23 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     }
   }
 
-  /// The built menu, plus the names of any dishes the chef couldn't write.
-  ///
-  /// Each dish is asked for separately and a failure is CAUGHT PER DISH. One
-  /// dish hitting a rate limit used to throw away every recipe that had
-  /// already come back — minutes of waiting and real money, gone, for a
-  /// snackbar. Now what worked is kept, the dish that didn't comes back
-  /// without a recipe (the hub shows that dinner as unfinished), and the cook
-  /// is told which one to retry.
-  Future<(HostEvent, List<String>)> _buildMenu() async {
-    final List<HostDish> input = <HostDish>[
-      for (int i = 0; i < _dishCtrls.length; i++)
-        if (_dishCtrls[i].text.trim().isNotEmpty)
-          HostDish(text: _dishCtrls[i].text.trim(), course: _dishCourses[i]),
-    ];
-    if (input.isEmpty) {
-      throw ChefException('Add at least one dish first.');
-    }
-    final String guestNotes = _notesCtrl.text.trim();
-    final List<Recipe?> recipes =
-        await Future.wait(input.map((HostDish d) async {
-      try {
-        return await Chef.generateHostDish(
-          dish: d.text,
-          course: d.course,
-          guests: _guests,
-          pantry: widget.items,
-          prices: widget.prices,
-          guestNotes: guestNotes,
-        );
-      } on ChefException {
-        return null;
-      }
-    }));
-
-    final List<HostDish> withRecipes = <HostDish>[];
-    final List<String> failed = <String>[];
-    for (int i = 0; i < input.length; i++) {
-      final Recipe? r = recipes[i];
-      withRecipes.add(r == null ? input[i] : input[i].copyWith(recipe: r));
-      if (r == null) {
-        failed.add(input[i].text);
-      }
-    }
-    if (failed.length == input.length) {
-      throw ChefException(input.length == 1
-          ? 'The chef couldn\'t write that one — try again.'
-          : 'The chef couldn\'t write any of those — try again.');
-    }
-
-    // Only the dishes that actually have a recipe can be planned around.
-    final List<HostDish> cookable =
-        withRecipes.where((HostDish d) => d.recipe != null).toList();
-
-    // The plan and the run sheet are independent of each other, so they are
-    // asked for together rather than one after the other.
-    final List<Object> plans = await Future.wait(<Future<Object>>[
-      if (_prepTimeline)
-        Chef.generateHostTimeline(
-            dishes: cookable, guests: _guests, eventDate: _eventDate)
-      else
-        Future<List<PrepDay>>.value(const <PrepDay>[]),
-      Chef.generateRunSheet(dishes: cookable, guests: _guests),
-    ]);
-
-    return (
-      HostEvent(
-        createdAtMs: DateTime.now().millisecondsSinceEpoch,
-        name: '',
+  /// This form's dishes, handed to the shared builder.
+  Future<(HostEvent, List<String>)> _buildMenu() => buildHostMenu(
+        input: <HostDish>[
+          for (int i = 0; i < _dishCtrls.length; i++)
+            if (_dishCtrls[i].text.trim().isNotEmpty)
+              HostDish(
+                  text: _dishCtrls[i].text.trim(), course: _dishCourses[i]),
+        ],
         guests: _guests,
         eventDate: _eventDate,
-        dishes: withRecipes,
-        guestNotes: guestNotes,
-        prepDays: plans[0] as List<PrepDay>,
-        runSheet: plans[1] as List<ServiceStep>,
-      ),
-      failed
-    );
-  }
+        name: '',
+        guestNotes: _notesCtrl.text.trim(),
+        dinnerNotes: '',
+        prepTimeline: _prepTimeline,
+        pantry: widget.items,
+        prices: widget.prices,
+      );
 
   Future<void> _build() async {
     if (_prepTimeline && _eventDate.isEmpty) {
@@ -910,6 +1010,183 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
               padding: const EdgeInsets.all(9),
               child: Icon(icon, size: 20, color: filled ? Colors.white : kInk)),
         ),
+      );
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// BRIEF — a dinner worked out in conversation with Claude, waiting to be
+// built. The thinking happened there, where it could be argued with; the
+// cooking happens here.
+// ═══════════════════════════════════════════════════════════════════════
+
+class HostBriefScreen extends StatefulWidget {
+  final HostBrief brief;
+  final List<PantryItem> items;
+  final PriceBook prices;
+  final void Function(HostEvent event) onSave;
+  final void Function(HostEvent event) onRemove;
+  final void Function(HostBrief brief) onBuilt;
+  final void Function(Recipe recipe, int servings)? onSaveRecipe;
+  final void Function(PantryItem item, double grams)? onUse;
+
+  const HostBriefScreen({
+    super.key,
+    required this.brief,
+    required this.items,
+    required this.prices,
+    required this.onSave,
+    required this.onRemove,
+    required this.onBuilt,
+    this.onSaveRecipe,
+    this.onUse,
+  });
+
+  @override
+  State<HostBriefScreen> createState() => _HostBriefScreenState();
+}
+
+class _HostBriefScreenState extends State<HostBriefScreen> {
+  Future<void> _build() async {
+    final HostBrief b = widget.brief;
+    final (HostEvent, List<String>)? built =
+        await withSpinner<(HostEvent, List<String>)>(
+      context,
+      'Cooking up ${b.name.isEmpty ? 'the menu' : b.name}…',
+      () => buildHostMenu(
+        input: b.dishes
+            .map((BriefDish d) =>
+                HostDish(text: d.text, course: d.course, notes: d.notes))
+            .toList(),
+        guests: b.guests,
+        eventDate: b.eventDate,
+        name: b.name,
+        guestNotes: b.guestNotes,
+        dinnerNotes: b.notes,
+        prepTimeline: true,
+        pantry: widget.items,
+        prices: widget.prices,
+      ),
+    );
+    if (built == null || !mounted) {
+      return;
+    }
+    widget.onSave(built.$1);
+    widget.onBuilt(b);
+    Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
+      builder: (_) => HostResultsScreen(
+        event: built.$1,
+        items: widget.items,
+        prices: widget.prices,
+        onSave: widget.onSave,
+        onRemove: widget.onRemove,
+        onSaveRecipe: widget.onSaveRecipe,
+        onUse: widget.onUse,
+      ),
+    ));
+    if (built.$2.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('The rest are ready. ${built.$2.join(', ')} didn\'t '
+              'come back — open the dinner and build '
+              '${built.$2.length == 1 ? 'it' : 'them'} again.')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final HostBrief b = widget.brief;
+    final double bottomPad = 32 + MediaQuery.of(context).viewPadding.bottom;
+    return Scaffold(
+      appBar: AppBar(
+          title: Text(b.name.isEmpty ? 'From Claude' : b.name,
+              style: serif(size: 20))),
+      body: ListView(
+        padding: pagePadding(context, top: 4, bottom: bottomPad),
+        children: <Widget>[
+          Text('FROM CLAUDE', style: labelCaps(color: kOlive)),
+          const SizedBox(height: 8),
+          Text(
+              <String>[
+                '${b.guests} ${b.guests == 1 ? 'guest' : 'guests'}',
+                if (b.eventDate.isNotEmpty) displayDate(b.eventDate),
+                '${b.dishes.length} dish${b.dishes.length == 1 ? '' : 'es'}',
+              ].join(' · '),
+              style: mono(size: 12, color: kMuted)),
+          const SizedBox(height: 16),
+          if (b.notes.isNotEmpty) ...<Widget>[
+            _noteCard('ABOUT THE DINNER', b.notes, kOlive),
+            const SizedBox(height: 12),
+          ],
+          if (b.guestNotes.isNotEmpty) ...<Widget>[
+            _noteCard('GUESTS', b.guestNotes, kWarn),
+            const SizedBox(height: 12),
+          ],
+          for (final BriefDish d in b.dishes) _dishCard(d),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            height: 56,
+            child: ElevatedButton.icon(
+              onPressed: _build,
+              icon: const Icon(Icons.restaurant_rounded),
+              label: Text('Build this menu',
+                  style: serif(
+                      size: 17, weight: FontWeight.w600, color: Colors.white)),
+              style: ElevatedButton.styleFrom(
+                  backgroundColor: kAccent,
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14))),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+              'The chef writes the recipes, the prep timeline and the run '
+              'sheet from this, using your pantry and your prices.',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: kFaint, height: 1.4)),
+        ],
+      ),
+    );
+  }
+
+  Widget _noteCard(String label, String text, Color tint) => Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+            color: tint.withValues(alpha: 0.10),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: tint.withValues(alpha: 0.4))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Text(label, style: labelCaps(color: tint)),
+          const SizedBox(height: 6),
+          Text(text, style: TextStyle(fontSize: 13.5, color: kInk, height: 1.45)),
+        ]),
+      );
+
+  Widget _dishCard(BriefDish d) => Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: kBorder)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Text(d.course.toUpperCase(), style: labelCaps(color: kOlive)),
+          const SizedBox(height: 5),
+          Text(d.text, style: serif(size: 18, weight: FontWeight.w600, height: 1.2)),
+          if (d.notes.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 7),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+              const Icon(Icons.subdirectory_arrow_right_rounded,
+                  size: 14, color: kMuted),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(d.notes,
+                    style:
+                        TextStyle(fontSize: 13, color: kMuted, height: 1.45)),
+              ),
+            ]),
+          ],
+        ]),
       );
 }
 

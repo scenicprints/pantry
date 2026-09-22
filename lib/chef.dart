@@ -811,6 +811,8 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     required List<PantryItem> pantry,
     PriceBook prices = const PriceBook(),
     String guestNotes = '',
+    String dishNotes = '',
+    String dinnerNotes = '',
   }) async {
     final List<String> avoids = await ChefKeys.getAvoids();
     final List<String> guestEntries = _splitGuestNotes(guestNotes);
@@ -821,7 +823,9 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
         guests: guests,
         pantry: pantry,
         prices: prices,
-        guestNotes: guestNotes);
+        guestNotes: guestNotes,
+        dishNotes: dishNotes,
+        dinnerNotes: dinnerNotes);
     List<AvoidHit> hits = recipeAvoidHits(out, allAvoids);
     if (hits.isNotEmpty) {
       final Recipe retry = await _askHostDish(
@@ -831,6 +835,8 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
           pantry: pantry,
           prices: prices,
           guestNotes: guestNotes,
+          dishNotes: dishNotes,
+          dinnerNotes: dinnerNotes,
           complaint: avoidComplaint(hits));
       final List<AvoidHit> retryHits = recipeAvoidHits(retry, allAvoids);
       if (retryHits.length < hits.length) {
@@ -854,6 +860,8 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     required List<PantryItem> pantry,
     required PriceBook prices,
     required String guestNotes,
+    String dishNotes = '',
+    String dinnerNotes = '',
     String complaint = '',
   }) async {
     final String knownPrices = formatKnownPrices(prices, pantry);
@@ -871,6 +879,17 @@ meal. Cook "$dish" properly, the real way it's made, at the quality a guest
 would expect. Do NOT lighten it, cut its fat or sugar, or simplify it for
 health reasons — there are no calorie, macro or health targets for this
 recipe. Keep every step and ingredient the dish genuinely calls for.
+${dishNotes.trim().isEmpty ? '' : '''
+
+WHAT THE HOST ASKED FOR, FOR THIS DISH — decided already, not a suggestion.
+Follow it even where you would have written the dish differently, and where
+it rules something out, do not reach for it in another form (told no cream
+sauce, do not hand back a béchamel):
+${dishNotes.trim()}'''}
+${dinnerNotes.trim().isEmpty ? '' : '''
+
+ABOUT THE DINNER AS A WHOLE (context — obey anything in it that touches this
+dish): ${dinnerNotes.trim()}'''}
 Every chop, mince, trim and drain the method relies on has to be somewhere
 the cook can see it, in a step or in the ingredient's amount — nothing in a
 step may depend on work never written down.
