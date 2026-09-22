@@ -536,11 +536,14 @@ ${servings == 1 ? 'person' : 'people'}. Measurements in GRAMS for anything
 weighed, counts for count items like eggs, spoons for spices, and "to taste"
 for salt and pepper. Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
-Keep it as simple as the dish honestly allows: as few steps and as few
-ingredients as the dish actually needs, and no technique a home cook on a
-weeknight wouldn't use. Do not pad the method to look thorough. Simple is not
-the same as bland — keep every step that makes the food good (the sear, the
-browning, the sauce, the seasoning, the acid at the end) and cut only padding.
+Keep it as simple as the dish honestly allows: as few ingredients as the dish
+actually needs, and no technique a home cook on a weeknight wouldn't use. Do
+not pad the method to look thorough. Simple is not the same as bland — keep
+every step that makes the food good (the sear, the browning, the sauce, the
+seasoning, the acid at the end) and cut only padding. And it is not the same
+as terse: the prep is not padding. Every chop, mince, trim and drain the method
+relies on has to be somewhere the cook can see it, in a step or in the
+ingredient's amount. Nothing in a step may depend on work you never wrote down.
 ${option.sides.isEmpty ? '' : '''
 The side is part of this recipe: "${option.sides}". Include its ingredients and
 its steps, sequenced so everything lands together (start what takes longest
@@ -728,7 +731,8 @@ $steps
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}],"cookGroups":[{"name":"","items":[""]}]}''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    final Map<String, dynamic> data =
+        await _post(user: user, maxTokens: 2500, cheap: true);
     return PrepPlan.fromJson(data, baseServings: recipe.baseServings);
   }
 
@@ -764,7 +768,8 @@ $avoids
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"use":"","note":"","fromPantry":false}''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 600);
+    final Map<String, dynamic> data =
+        await _post(user: user, maxTokens: 600, cheap: true);
     return Substitution.fromJson(data);
   }
 
@@ -776,23 +781,28 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   /// told the reply was invalid and has to start over by hand. Only unreadable
   /// replies are retried — a bad key or a dead connection is not worth a
   /// second call.
+  ///
+  /// [cheap] is for the calls that only rearrange what a previous call already
+  /// decided. Nothing a person cooks from is cheap.
   static Future<Map<String, dynamic>> _post({
     required String user,
     required int maxTokens,
+    bool cheap = false,
   }) async {
     try {
-      return await _postOnce(user: user, maxTokens: maxTokens);
+      return await _postOnce(user: user, maxTokens: maxTokens, cheap: cheap);
     } on ChefException catch (e) {
       if (!e.unreadable) {
         rethrow;
       }
     }
-    return _postOnce(user: user, maxTokens: maxTokens);
+    return _postOnce(user: user, maxTokens: maxTokens, cheap: cheap);
   }
 
   static Future<Map<String, dynamic>> _postOnce({
     required String user,
     required int maxTokens,
+    bool cheap = false,
   }) async {
     final String key = await ChefKeys.effectiveKey();
     if (key.isEmpty) {
@@ -802,18 +812,21 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
 
     // Opus 5 THINKS BY DEFAULT; opus-4-8, which it replaced, did not. Thinking
     // tokens are spent out of max_tokens, so a budget that comfortably held
-    // five options before now has to cover the reasoning as well — and when it
-    // runs out, the JSON is truncated mid-object and the reply is unreadable.
+    // five options before now has to cover the reasoning as well, and when it
+    // runs out the JSON is truncated mid-object and the reply is unreadable.
     //
-    // Every call here wants a filled-in JSON shape, not a hard think, so ask
-    // for low effort rather than switching thinking off: disabling it on Opus 5
-    // has its own failure modes (stray tags leaking into the text). Then give
-    // the budget and the clock room for whatever thinking still happens.
+    // THAT IS NOT A REASON TO CAP THE THINKING. Pinning every call to low
+    // effort fixed the truncation and quietly wrecked the cooking: a recipe
+    // came back with its prep folded away and steps that assumed work the
+    // method never told you to do. Writing a method someone can actually cook
+    // from IS the hard think. Only the two mechanical shape-fills below run
+    // cheap. Everything else gets the model's own judgement and a budget wide
+    // enough to hold it.
     final bool thinks = _thinksByDefault(model);
     final Map<String, dynamic> body = <String, dynamic>{
       'model': model,
-      'max_tokens': thinks ? maxTokens * 3 : maxTokens,
-      if (thinks) 'output_config': <String, dynamic>{'effort': 'low'},
+      'max_tokens': thinks ? maxTokens * (cheap ? 3 : 4) : maxTokens,
+      if (thinks && cheap) 'output_config': <String, dynamic>{'effort': 'low'},
       // Fixed rules ride in a cached system block; only the user turn varies.
       'system': <Map<String, dynamic>>[
         <String, dynamic>{
@@ -839,7 +852,7 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
             },
             body: jsonEncode(body),
           )
-          .timeout(Duration(seconds: thinks ? 150 : 60));
+          .timeout(Duration(seconds: thinks ? (cheap ? 150 : 240) : 60));
     } catch (_) {
       throw ChefException('Network error — check your connection and retry.');
     }
@@ -1399,6 +1412,27 @@ RECIPE OUTPUT FORMAT:
   conflicting equipment in one step (preheat oven and boil on stove are separate
   steps). Include pro tips where they matter (slice against the grain; pan OFF
   heat for carbonara; press tofu well; don't overcrowd the air fryer).
+- NO STEP MAY ASSUME WORK AN EARLIER STEP NEVER ASKED FOR. If the method says
+  "mix it into the beef with the parsley and the garlic", then chopping the
+  parsley and mincing the garlic have to have happened somewhere the cook can
+  see: either in an earlier step, or written into that ingredient's amount
+  ("parsley, 15 g, chopped"). The same goes for trimming, dicing, draining,
+  rinsing, patting dry and soaking. Do NOT write steps for defrosting, or for
+  fetching things out of the fridge; he knows. Read your own method back as
+  somebody standing at a cold counter with the shopping done and nothing else.
+  If they would have to stop and work something out that you never told them,
+  the step is wrong.
+- SAY WHEN SOMETHING GOES IN RAW. Where a protein is seasoned, shaped or mixed
+  before it is ever cooked — kafta, meatballs, meatloaf, burgers, a stuffing,
+  a marinade — the step has to say so in its own words ("mix the RAW ground
+  beef with...", "the patties go in raw and cook through in the tray"). Read
+  cold, a step that says "mix it into the beef" reads like the beef was already
+  browned in a step you forgot to write. Name the state whenever the step could
+  be read either way.
+- Keeping the method short means not padding it with flourishes and restated
+  obvious moves. It does NOT mean folding three real jobs into one line or
+  skipping the prep. Where cutting a step would make the cook guess, keep the
+  step.
 
 HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
 rolling boil).
