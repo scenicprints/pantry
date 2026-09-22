@@ -689,20 +689,45 @@ line saying what you changed and why.''';
 Plan the mise en place for "${recipe.title}". The cook measures everything into
 bowls before starting.
 
-Two ingredients share a bowl ONLY when they go into the pan at the same moment
-AND sitting together until then harms neither.
+TOGETHER IS THE DEFAULT. The cook tares the scale between every ingredient, so
+a shared bowl costs him nothing and a split one costs him a bowl, a trip to the
+sink, and a pointless extra weighing. Only separate for one of the named
+reasons below. Measuring two things apart and then combining them in the very
+next breath is the failure to avoid, and it is the one that keeps happening.
 
-Never put in the same bowl:
-- raw meat, poultry, fish or raw egg with anything at all
-- salt or sugar with cut vegetables, or with anything that will weep
-- an acid (citrus, vinegar, wine, tomato) with dairy
-- baking soda or baking powder with any acid or any liquid
-- fresh soft herbs with anything hot or acidic
-- anything added to taste at the end, or any garnish
+THE TEST. Two ingredients share a bowl when they meet in the same vessel at the
+same moment and nothing below says to keep them apart. The vessel is whatever
+the recipe combines them in: a pan, a pot, a tray, or a MIXING BOWL. A mixing
+bowl counts. When a step says to mix several things together, the bowl he
+measures them into IS that mixing bowl, and they all go in it.
 
-Everything else that goes in together can share. An ingredient that shares with
-nothing still gets its own bowl: every ingredient below must appear exactly
-once across the bowls, none dropped, none repeated.
+So: if the method would have him tip bowl A into bowl B with nothing done to
+either one in between, A and B were always one bowl. Write them as one.
+
+SEPARATE ONLY FOR THESE:
+- Raw meat, poultry, fish or egg together with something that is NOT joining
+  that same mixture. Contamination is the reason, so it does not apply to
+  whatever gets mixed INTO the meat. Seasoned ground meat for kafta, meatballs,
+  meatloaf or burgers is ONE bowl: the meat, the grated onion, the herbs, the
+  garlic and the spices, all of it.
+- Salt or sugar on cut vegetables that then SIT for a while before cooking;
+  they draw water out. Not a concern when the bowl goes in the pan shortly, and
+  not a concern for salt inside a mixture that is about to be cooked.
+- An acid (citrus, vinegar, wine, tomato) with dairy. It curdles.
+- Baking soda or baking powder with any acid or any liquid.
+- Fresh soft herbs with anything hot, or with an acid they will sit in long
+  enough to go drab. Herbs going straight into a mix are fine.
+- Anything added to taste at the end, and any garnish.
+- An ingredient the method adds in stages, where part goes in early and part
+  goes in later. Split it the way the method splits it.
+
+An ingredient that shares with nothing still gets its own bowl. Every
+ingredient below must appear exactly once across the bowls, none dropped, none
+repeated.
+
+BEFORE YOU ANSWER, read your own bowls back against the steps. Find every place
+two of them are emptied into the same thing at the same moment with nothing
+done in between, and merge those. That check is the job.
 
 Name each bowl for what it is ("Aromatics", "Tomato base", "Spice mix"), never
 "Bowl 1". Set "step" to the number of the step it goes into, or 0 if it is not
@@ -731,8 +756,7 @@ $steps
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}],"cookGroups":[{"name":"","items":[""]}]}''';
 
-    final Map<String, dynamic> data =
-        await _post(user: user, maxTokens: 2500, cheap: true);
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
     return PrepPlan.fromJson(data, baseServings: recipe.baseServings);
   }
 
@@ -768,8 +792,7 @@ $avoids
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"use":"","note":"","fromPantry":false}''';
 
-    final Map<String, dynamic> data =
-        await _post(user: user, maxTokens: 600, cheap: true);
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 600);
     return Substitution.fromJson(data);
   }
 
@@ -781,28 +804,23 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   /// told the reply was invalid and has to start over by hand. Only unreadable
   /// replies are retried — a bad key or a dead connection is not worth a
   /// second call.
-  ///
-  /// [cheap] is for the calls that only rearrange what a previous call already
-  /// decided. Nothing a person cooks from is cheap.
   static Future<Map<String, dynamic>> _post({
     required String user,
     required int maxTokens,
-    bool cheap = false,
   }) async {
     try {
-      return await _postOnce(user: user, maxTokens: maxTokens, cheap: cheap);
+      return await _postOnce(user: user, maxTokens: maxTokens);
     } on ChefException catch (e) {
       if (!e.unreadable) {
         rethrow;
       }
     }
-    return _postOnce(user: user, maxTokens: maxTokens, cheap: cheap);
+    return _postOnce(user: user, maxTokens: maxTokens);
   }
 
   static Future<Map<String, dynamic>> _postOnce({
     required String user,
     required int maxTokens,
-    bool cheap = false,
   }) async {
     final String key = await ChefKeys.effectiveKey();
     if (key.isEmpty) {
@@ -815,18 +833,21 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     // five options before now has to cover the reasoning as well, and when it
     // runs out the JSON is truncated mid-object and the reply is unreadable.
     //
-    // THAT IS NOT A REASON TO CAP THE THINKING. Pinning every call to low
-    // effort fixed the truncation and quietly wrecked the cooking: a recipe
-    // came back with its prep folded away and steps that assumed work the
-    // method never told you to do. Writing a method someone can actually cook
-    // from IS the hard think. Only the two mechanical shape-fills below run
-    // cheap. Everything else gets the model's own judgement and a budget wide
-    // enough to hold it.
+    // THAT IS NOT A REASON TO CAP THE THINKING. Pinning the calls to low
+    // effort stopped the truncation and quietly wrecked the cooking: a recipe
+    // whose prep was folded away, and a mise en place that had him weigh the
+    // meat and the onion into two bowls and tip them together a second later.
+    //
+    // There is no cheap call here. Every one of them is a judgement about food
+    // that a person then stands at a counter and follows, and the two that
+    // LOOKED mechanical, grouping the bowls and finding a swap for something
+    // he has run out of, are the two he has actually called bad. So there is
+    // no effort cap anywhere, and the budget is wide enough to hold the
+    // reasoning rather than truncating the JSON behind it.
     final bool thinks = _thinksByDefault(model);
     final Map<String, dynamic> body = <String, dynamic>{
       'model': model,
-      'max_tokens': thinks ? maxTokens * (cheap ? 3 : 4) : maxTokens,
-      if (thinks && cheap) 'output_config': <String, dynamic>{'effort': 'low'},
+      'max_tokens': thinks ? maxTokens * 4 : maxTokens,
       // Fixed rules ride in a cached system block; only the user turn varies.
       'system': <Map<String, dynamic>>[
         <String, dynamic>{
@@ -852,7 +873,7 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
             },
             body: jsonEncode(body),
           )
-          .timeout(Duration(seconds: thinks ? (cheap ? 150 : 240) : 60));
+          .timeout(Duration(seconds: thinks ? 240 : 60));
     } catch (_) {
       throw ChefException('Network error — check your connection and retry.');
     }
