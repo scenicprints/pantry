@@ -82,6 +82,13 @@ class HostEvent {
   final String guestNotes; // this event only — never the permanent avoid list
   final List<PrepDay> prepDays; // empty when no timeline was requested
 
+  /// Ticked shopping-list rows, keyed "dishIndex:ingredientIndex". Keys
+  /// rather than positions because building a missing dish inserts its
+  /// ingredients mid-list. Travels with the event for the same reason the
+  /// menu's ticks do: the list you tick in the shop is the one waiting at
+  /// home.
+  final List<String> checked;
+
   const HostEvent({
     required this.createdAtMs,
     required this.name,
@@ -90,9 +97,31 @@ class HostEvent {
     required this.dishes,
     required this.guestNotes,
     this.prepDays = const <PrepDay>[],
+    this.checked = const <String>[],
   });
 
   String get id => createdAtMs.toString();
+
+  /// Total shopping-list rows across every built dish.
+  int get ingredientCount => allIngredients.length;
+
+  /// How many of them are ticked, ignoring keys left over from a dish that
+  /// no longer exists.
+  int get gatheredCount {
+    int n = 0;
+    for (int d = 0; d < dishes.length; d++) {
+      final Recipe? r = dishes[d].recipe;
+      if (r == null) {
+        continue;
+      }
+      for (int i = 0; i < r.ingredients.length; i++) {
+        if (checked.contains('$d:$i')) {
+          n++;
+        }
+      }
+    }
+    return n;
+  }
 
   List<Recipe> get recipes =>
       dishes.map((HostDish d) => d.recipe).whereType<Recipe>().toList();
@@ -123,14 +152,20 @@ class HostEvent {
     return !d.isBefore(day);
   }
 
-  HostEvent copyWith({String? name}) => HostEvent(
+  HostEvent copyWith({
+    String? name,
+    List<HostDish>? dishes,
+    List<String>? checked,
+  }) =>
+      HostEvent(
         createdAtMs: createdAtMs,
         name: name ?? this.name,
         guests: guests,
         eventDate: eventDate,
-        dishes: dishes,
+        dishes: dishes ?? this.dishes,
         guestNotes: guestNotes,
         prepDays: prepDays,
+        checked: checked ?? this.checked,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -141,6 +176,7 @@ class HostEvent {
         'dishes': dishes.map((HostDish d) => d.toJson()).toList(),
         'guestNotes': guestNotes,
         'prepDays': prepDays.map((PrepDay p) => p.toJson()).toList(),
+        'checked': checked,
       };
 
   factory HostEvent.fromJson(Map<String, dynamic> j) => HostEvent(
@@ -156,6 +192,9 @@ class HostEvent {
         prepDays: ((j['prepDays'] as List<dynamic>?) ?? const <dynamic>[])
             .whereType<Map<String, dynamic>>()
             .map(PrepDay.fromJson)
+            .toList(),
+        checked: ((j['checked'] as List<dynamic>?) ?? const <dynamic>[])
+            .map((dynamic e) => e.toString())
             .toList(),
       );
 }

@@ -106,6 +106,28 @@ void main() {
       expect(_e(1, date: 'not a date').isUpcoming(now), true); // unparsable
     });
 
+    test('gatheredCount counts ticks, ignoring keys for dishes that are gone',
+        () {
+      final HostEvent e = _e(1, dishes: <HostDish>[
+        _d('Lasagna', 'Main',
+            recipe: _r('Lasagna', items: <String>['Noodles', 'Beef'])),
+        _d('Broccolini', 'Side',
+            recipe: _r('Broccolini', items: <String>['Broccolini'])),
+      ]).copyWith(checked: <String>['0:0', '1:0', '7:3']);
+      expect(e.ingredientCount, 3);
+      expect(e.gatheredCount, 2); // the 7:3 key belongs to nothing
+    });
+
+    test('ticks survive encode → decode', () {
+      final HostEvent e = _e(1, dishes: <HostDish>[
+        _d('Lasagna', 'Main',
+            recipe: _r('Lasagna', items: <String>['Noodles', 'Beef'])),
+      ]).copyWith(checked: <String>['0:1']);
+      final HostEvent back = HostEvent.fromJson(e.toJson());
+      expect(back.checked, <String>['0:1']);
+      expect(back.gatheredCount, 1);
+    });
+
     test('copyWith only renames, everything else is stable', () {
       final HostEvent e = _e(42, guests: 8, date: '2026-10-03', notes: 'no shellfish');
       final HostEvent named = e.copyWith(name: "Sarah's Birthday");

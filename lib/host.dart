@@ -32,6 +32,13 @@ const List<String> _kMonths = <String>[
   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ];
 
+/// The iPad is a cooking surface, not a second copy of the app (IOS.md).
+/// Planning a dinner and running the shop stay on the phone; here Host Hub
+/// shows only what you need standing at the counter — the menu, the prep
+/// timeline, and the recipes.
+bool _cookingSurface(BuildContext context) =>
+    MediaQuery.sizeOf(context).shortestSide >= 600;
+
 /// "Sat, Oct 3" from a 'YYYY-MM-DD' string; '' if unparsable.
 String displayDate(String iso) {
   final DateTime? d = DateTime.tryParse(iso);
@@ -47,7 +54,7 @@ String displayDate(String iso) {
 // place you return to, not just a form you fill in once and forget.
 // ═══════════════════════════════════════════════════════════════════════
 
-class HostHubScreen extends StatelessWidget {
+class HostHubScreen extends StatefulWidget {
   final List<HostEvent> events; // pre-sorted: upcoming first, then past
   final List<PantryItem> items;
   final PriceBook prices;
@@ -67,15 +74,55 @@ class HostHubScreen extends StatelessWidget {
     this.onUse,
   });
 
+  @override
+  State<HostHubScreen> createState() => _HostHubScreenState();
+}
+
+/// Holds its own copy of the list. The screens it opens save and delete
+/// through here as well as up to the Cook tab, because a route that captured
+/// the list when it opened would still be showing the old one when you came
+/// back — a dinner you just built missing from the hub that built it.
+class _HostHubScreenState extends State<HostHubScreen> {
+  late List<HostEvent> _events = widget.events;
+
+  /// A `late` field initialises once, so a rebuild carrying a different list
+  /// would have gone on showing the first one — the same staleness this
+  /// screen exists to avoid, one level up.
+  @override
+  void didUpdateWidget(HostHubScreen old) {
+    super.didUpdateWidget(old);
+    if (!identical(old.events, widget.events)) {
+      _events = widget.events;
+    }
+  }
+
+  void _handleSave(HostEvent e) {
+    widget.onSave(e);
+    final List<HostEvent> next = List<HostEvent>.of(_events);
+    final int i = next.indexWhere((HostEvent x) => x.id == e.id);
+    if (i >= 0) {
+      next[i] = e;
+    } else {
+      next.add(e);
+    }
+    setState(() => _events = HostHubBox(next).sorted);
+  }
+
+  void _handleRemove(HostEvent e) {
+    widget.onRemove(e);
+    setState(() =>
+        _events = _events.where((HostEvent x) => x.id != e.id).toList());
+  }
+
   void _openSetup(BuildContext context) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => HostSetupScreen(
-        items: items,
-        prices: prices,
-        onSave: onSave,
-        onRemove: onRemove,
-        onSaveRecipe: onSaveRecipe,
-        onUse: onUse,
+        items: widget.items,
+        prices: widget.prices,
+        onSave: _handleSave,
+        onRemove: _handleRemove,
+        onSaveRecipe: widget.onSaveRecipe,
+        onUse: widget.onUse,
       ),
     ));
   }
@@ -84,11 +131,11 @@ class HostHubScreen extends StatelessWidget {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => HostResultsScreen(
         event: event,
-        items: items,
-        onSave: onSave,
-        onRemove: onRemove,
-        onSaveRecipe: onSaveRecipe,
-        onUse: onUse,
+        items: widget.items,
+        onSave: _handleSave,
+        onRemove: _handleRemove,
+        onSaveRecipe: widget.onSaveRecipe,
+        onUse: widget.onUse,
       ),
     ));
   }
@@ -96,103 +143,340 @@ class HostHubScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final DateTime now = DateTime.now();
+    final List<HostEvent> events = _events;
     final List<HostEvent> upcoming =
         events.where((HostEvent e) => e.isUpcoming(now)).toList();
     final List<HostEvent> past =
         events.where((HostEvent e) => !e.isUpcoming(now)).toList();
+    final HostEvent? next = upcoming.isEmpty ? null : upcoming.first;
+    final List<HostEvent> rest =
+        upcoming.length > 1 ? upcoming.sublist(1) : const <HostEvent>[];
+    final int guestsFed = past.fold(0, (int s, HostEvent e) => s + e.guests);
     final double bottomPad = 32 + MediaQuery.of(context).viewPadding.bottom;
+    final bool cooking = _cookingSurface(context);
+
     return Scaffold(
       appBar: AppBar(title: Text('Host Hub', style: serif(size: 20))),
       body: ListView(
         padding: pagePadding(context, top: 4, bottom: bottomPad),
         children: <Widget>[
-          Text(
-              'Plan a menu for guests — no diet rules attached, just the '
-              'dishes you name, shopped, scaled, and on the iPad when you '
-              'cook.',
-              style: TextStyle(color: kMuted, fontSize: 13.5, height: 1.4)),
-          const SizedBox(height: 20),
-          SizedBox(
-            width: double.infinity,
-            height: 56,
-            child: ElevatedButton.icon(
-              onPressed: () => _openSetup(context),
-              icon: const Icon(Icons.add_rounded),
-              label: Text('New dinner',
-                  style: serif(
-                      size: 17, weight: FontWeight.w600, color: Colors.white)),
-              style: ElevatedButton.styleFrom(
-                  backgroundColor: kAccent,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14))),
+          if (next != null) ...<Widget>[
+            _nextCard(context, next, now, cooking),
+            const SizedBox(height: 18),
+          ],
+          if (events.isNotEmpty && !cooking) ...<Widget>[
+            _statsRow(upcoming.length, past.length, guestsFed),
+            const SizedBox(height: 18),
+          ],
+          if (events.isEmpty) ...<Widget>[
+            _emptyState(cooking),
+            const SizedBox(height: 18),
+          ],
+          // Planning happens on the phone; the iPad is where you cook it.
+          if (!cooking)
+            SizedBox(
+              width: double.infinity,
+              height: 56,
+              child: ElevatedButton.icon(
+                onPressed: () => _openSetup(context),
+                icon: const Icon(Icons.add_rounded),
+                label: Text(
+                    next == null ? 'Plan a dinner' : 'Plan another dinner',
+                    style: serif(
+                        size: 17, weight: FontWeight.w600, color: Colors.white)),
+                style: ElevatedButton.styleFrom(
+                    backgroundColor: kAccent,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14))),
+              ),
             ),
-          ),
-          const SizedBox(height: 26),
-          if (events.isEmpty) _emptyState(),
-          if (upcoming.isNotEmpty) ...<Widget>[
-            Text('UPCOMING', style: labelCaps(color: kAccent)),
+          if (rest.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 26),
+            Text('ALSO COMING UP', style: labelCaps(color: kAccent)),
             const SizedBox(height: 10),
-            for (final HostEvent e in upcoming)
-              _eventCard(context, e, highlight: true),
-            const SizedBox(height: 22),
+            for (final HostEvent e in rest) _eventRow(context, e, now),
           ],
           if (past.isNotEmpty) ...<Widget>[
-            Text('PAST', style: labelCaps()),
+            const SizedBox(height: 26),
+            Text('ALREADY HOSTED', style: labelCaps()),
             const SizedBox(height: 10),
-            for (final HostEvent e in past) _eventCard(context, e),
+            for (final HostEvent e in past) _eventRow(context, e, now),
           ],
         ],
       ),
     );
   }
 
-  Widget _emptyState() => Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-            color: kCard,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: kBorder)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-          Text('Nothing planned yet', style: serif(size: 17, weight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Text(
-              'Start a dinner above — pick a guest count, name your dishes, '
-              'and get real recipes for them, no diet rules attached.',
-              style: TextStyle(color: kMuted, fontSize: 13, height: 1.4)),
-        ]),
-      );
-
-  Widget _eventCard(BuildContext context, HostEvent e, {bool highlight = false}) {
+  /// The hero: the dinner you're actually cooking next, with everything you'd
+  /// want to know at a glance — how long you've got, what's on the menu, what
+  /// it costs, and how far through the shopping you are.
+  Widget _nextCard(
+      BuildContext context, HostEvent e, DateTime now, bool cooking) {
     final String title = e.name.trim().isEmpty ? 'Unnamed dinner' : e.name.trim();
-    final String dateLabel = e.eventDate.isEmpty ? '' : displayDate(e.eventDate);
-    final bool built = e.isBuilt;
+    final int total = e.ingredientCount;
+    final int got = e.gatheredCount;
+    final double progress = total == 0 ? 0 : got / total;
+    final List<HostDish> built =
+        e.dishes.where((HostDish d) => d.recipe != null).toList();
+    final int missing = e.dishes.length - built.length;
+
     return GestureDetector(
       onTap: () => _openEvent(context, e),
       child: Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: kCard,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: kAccent.withValues(alpha: 0.55), width: 1.6),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Row(children: <Widget>[
+            Flexible(child: _countdownPill(e, now)),
+            const Spacer(),
+            Text('${e.guests} ${e.guests == 1 ? 'guest' : 'guests'}',
+                style: mono(size: 11, weight: FontWeight.w600, color: kMuted)),
+          ]),
+          const SizedBox(height: 12),
+          Text(title,
+              style: serif(size: 27, weight: FontWeight.w600, height: 1.1)),
+          if (e.eventDate.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 4),
+            Text(displayDate(e.eventDate),
+                style: mono(size: 12, color: kMuted)),
+          ],
+          if (built.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 16),
+            for (final HostDish d in built) _menuLine(d),
+          ],
+          if (missing > 0) ...<Widget>[
+            const SizedBox(height: 10),
+            Row(children: <Widget>[
+              const Icon(Icons.error_outline_rounded, size: 14, color: kWarn),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                    '$missing dish${missing == 1 ? '' : 'es'} still to build',
+                    style:
+                        mono(size: 11, weight: FontWeight.w600, color: kWarn)),
+              ),
+            ]),
+          ],
+          // The shopping run is a phone job — on the counter it's noise.
+          if (total > 0 && !cooking) ...<Widget>[
+            const SizedBox(height: 18),
+            Row(children: <Widget>[
+              Text('SHOPPING', style: labelCaps()),
+              const Spacer(),
+              Text('$got / $total',
+                  style: mono(
+                      size: 12,
+                      weight: FontWeight.w600,
+                      color: got == total ? kOlive : kMuted)),
+            ]),
+            const SizedBox(height: 7),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: LinearProgressIndicator(
+                value: progress,
+                minHeight: 7,
+                backgroundColor: kInset,
+                valueColor: AlwaysStoppedAnimation<Color>(
+                    got == total ? kOlive : kAccent),
+              ),
+            ),
+          ],
+          if (e.estCostTotal > 0 && !cooking) ...<Widget>[
+            const SizedBox(height: 14),
+            Row(children: <Widget>[
+              Text('≈ ${money(e.estCostTotal)}',
+                  style: serif(size: 18, weight: FontWeight.w600, color: kAccent)),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text('for the table',
+                    overflow: TextOverflow.ellipsis,
+                    style: mono(size: 11, color: kMuted)),
+              ),
+              const Spacer(),
+              const Icon(Icons.chevron_right_rounded, color: kMuted),
+            ]),
+          ],
+          if (cooking) ...<Widget>[
+            const SizedBox(height: 16),
+            Row(children: <Widget>[
+              const Icon(Icons.local_fire_department_rounded,
+                  size: 16, color: kAccent),
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text('Open to prep and cook',
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        mono(size: 11, weight: FontWeight.w600, color: kAccent)),
+              ),
+              const Spacer(),
+              const Icon(Icons.chevron_right_rounded, color: kMuted),
+            ]),
+          ],
+        ]),
+      ),
+    );
+  }
+
+  /// "TONIGHT" / "TOMORROW" / "IN 5 DAYS" — the thing that makes the hub feel
+  /// live rather than a list of records.
+  Widget _countdownPill(HostEvent e, DateTime now) {
+    final DateTime? d = DateTime.tryParse(e.eventDate);
+    late final String label;
+    late final Color color;
+    if (d == null) {
+      label = 'NO DATE YET';
+      color = kMuted;
+    } else {
+      final DateTime today = DateTime(now.year, now.month, now.day);
+      final int days = DateTime(d.year, d.month, d.day).difference(today).inDays;
+      if (days <= 0) {
+        label = 'TONIGHT';
+        color = kAccent;
+      } else if (days == 1) {
+        label = 'TOMORROW';
+        color = kAccent;
+      } else if (days <= 7) {
+        label = 'IN $days DAYS';
+        color = kOlive;
+      } else {
+        label = 'IN $days DAYS';
+        color = kMuted;
+      }
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999)),
+      child: Text(label,
+          style: mono(size: 10.5, weight: FontWeight.w700, color: color, spacing: 1.0)),
+    );
+  }
+
+  /// One line of the menu: the course, then the dish as the chef titled it.
+  Widget _menuLine(HostDish d) => Padding(
+        padding: const EdgeInsets.only(bottom: 7),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          SizedBox(
+              width: 64,
+              child: Text(d.course.toUpperCase(),
+                  style: mono(size: 9.5, weight: FontWeight.w600, color: kOlive))),
+          Expanded(
+            child: Text(d.recipe?.title ?? d.text,
+                style: serif(
+                    size: 14.5, weight: FontWeight.w500, height: 1.25)),
+          ),
+        ]),
+      );
+
+  Widget _statsRow(int upcoming, int hosted, int guestsFed) => Row(children: <Widget>[
+        _stat('$upcoming', upcoming == 1 ? 'coming up' : 'coming up'),
+        const SizedBox(width: 10),
+        _stat('$hosted', 'hosted'),
+        const SizedBox(width: 10),
+        _stat('$guestsFed', 'guests fed'),
+      ]);
+
+  Widget _stat(String value, String label) => Expanded(
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 13),
+          decoration: BoxDecoration(
+              color: kCard,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: kBorder)),
+          child: Column(children: <Widget>[
+            Text(value, style: serif(size: 22, weight: FontWeight.w600)),
+            const SizedBox(height: 2),
+            Text(label, style: mono(size: 9.5, color: kMuted, spacing: 0.4)),
+          ]),
+        ),
+      );
+
+  Widget _emptyState(bool cooking) => Container(
+        padding: const EdgeInsets.all(22),
         decoration: BoxDecoration(
             color: kCard,
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: highlight ? kAccent.withValues(alpha: 0.5) : kBorder)),
-        child: Row(children: <Widget>[
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
-              Text(title, style: serif(size: 16, weight: FontWeight.w600)),
-              const SizedBox(height: 3),
-              Text(
-                  <String>[
-                    '${e.guests} guest${e.guests == 1 ? '' : 's'}',
-                    if (dateLabel.isNotEmpty) dateLabel,
-                    '${e.dishes.length} dish${e.dishes.length == 1 ? '' : 'es'}',
-                    if (!built) 'unfinished',
-                  ].join(' · '),
-                  style: mono(size: 11, color: built ? kMuted : kWarn)),
-            ]),
-          ),
-          const Icon(Icons.chevron_right_rounded, color: kMuted),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: kBorder)),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Text('WHEN COMPANY\'S COMING', style: labelCaps(color: kAccent)),
+          const SizedBox(height: 10),
+          Text(
+              cooking
+                  ? 'No dinner planned yet'
+                  : 'Nothing on the table yet',
+              style: serif(size: 24, weight: FontWeight.w600, height: 1.15)),
+          const SizedBox(height: 14),
+          if (cooking)
+            _emptyLine(Icons.phone_iphone_rounded,
+                'Plan one on your phone and it turns up here — the menu, the '
+                'prep timeline and every recipe, ready to cook.')
+          else ...<Widget>[
+            _emptyLine(Icons.groups_rounded, 'Name the dishes you want to make — '
+                'the chef writes them properly, scaled to your guest count.'),
+            _emptyLine(Icons.receipt_long_rounded, 'One shopping list across the '
+                'whole menu, priced, checked against your pantry.'),
+            _emptyLine(Icons.tablet_mac_rounded, 'The menu, the prep timeline '
+                'and the recipes are on the iPad when you cook.'),
+          ],
         ]),
+      );
+
+  Widget _emptyLine(IconData icon, String text) => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Icon(icon, size: 16, color: kOlive),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(text,
+                style: TextStyle(fontSize: 13, color: kMuted, height: 1.45)),
+          ),
+        ]),
+      );
+
+  /// A compact row for everything that isn't the next dinner.
+  Widget _eventRow(BuildContext context, HostEvent e, DateTime now) {
+    final String title = e.name.trim().isEmpty ? 'Unnamed dinner' : e.name.trim();
+    final String dateLabel = e.eventDate.isEmpty ? 'No date' : displayDate(e.eventDate);
+    final bool built = e.isBuilt;
+    final int total = e.ingredientCount;
+    final int got = e.gatheredCount;
+    return Material(
+      color: kCard,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: () => _openEvent(context, e),
+        child: Container(
+          margin: const EdgeInsets.only(bottom: 10),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: kBorder)),
+          child: Row(children: <Widget>[
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+                Text(title, style: serif(size: 16, weight: FontWeight.w600)),
+                const SizedBox(height: 4),
+                Text(
+                    <String>[
+                      dateLabel,
+                      '${e.guests} ${e.guests == 1 ? 'guest' : 'guests'}',
+                      '${e.dishes.length} dish${e.dishes.length == 1 ? '' : 'es'}',
+                      if (!built) 'unfinished',
+                      if (built && total > 0 && got == total) 'shopped',
+                    ].join(' · '),
+                    style: mono(size: 10.5, color: built ? kMuted : kWarn)),
+              ]),
+            ),
+            const Icon(Icons.chevron_right_rounded, color: kMuted),
+          ]),
+        ),
       ),
     );
   }
@@ -272,7 +556,15 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
     }
   }
 
-  Future<HostEvent> _buildMenu() async {
+  /// The built menu, plus the names of any dishes the chef couldn't write.
+  ///
+  /// Each dish is asked for separately and a failure is CAUGHT PER DISH. One
+  /// dish hitting a rate limit used to throw away every recipe that had
+  /// already come back — minutes of waiting and real money, gone, for a
+  /// snackbar. Now what worked is kept, the dish that didn't comes back
+  /// without a recipe (the hub shows that dinner as unfinished), and the cook
+  /// is told which one to retry.
+  Future<(HostEvent, List<String>)> _buildMenu() async {
     final List<HostDish> input = <HostDish>[
       for (int i = 0; i < _dishCtrls.length; i++)
         if (_dishCtrls[i].text.trim().isNotEmpty)
@@ -282,31 +574,58 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
       throw ChefException('Add at least one dish first.');
     }
     final String guestNotes = _notesCtrl.text.trim();
-    final List<Recipe> recipes = await Future.wait(input.map((HostDish d) =>
-        Chef.generateHostDish(
+    final List<Recipe?> recipes =
+        await Future.wait(input.map((HostDish d) async {
+      try {
+        return await Chef.generateHostDish(
           dish: d.text,
           course: d.course,
           guests: _guests,
           pantry: widget.items,
           prices: widget.prices,
           guestNotes: guestNotes,
-        )));
-    final List<HostDish> withRecipes = <HostDish>[
-      for (int i = 0; i < input.length; i++) input[i].copyWith(recipe: recipes[i]),
-    ];
+        );
+      } on ChefException {
+        return null;
+      }
+    }));
+
+    final List<HostDish> withRecipes = <HostDish>[];
+    final List<String> failed = <String>[];
+    for (int i = 0; i < input.length; i++) {
+      final Recipe? r = recipes[i];
+      withRecipes.add(r == null ? input[i] : input[i].copyWith(recipe: r));
+      if (r == null) {
+        failed.add(input[i].text);
+      }
+    }
+    if (failed.length == input.length) {
+      throw ChefException(input.length == 1
+          ? 'The chef couldn\'t write that one — try again.'
+          : 'The chef couldn\'t write any of those — try again.');
+    }
+
     List<PrepDay> prepDays = const <PrepDay>[];
     if (_prepTimeline) {
+      // Only the dishes that actually have a recipe can be planned around.
       prepDays = await Chef.generateHostTimeline(
-          dishes: withRecipes, guests: _guests, eventDate: _eventDate);
+          dishes: withRecipes
+              .where((HostDish d) => d.recipe != null)
+              .toList(),
+          guests: _guests,
+          eventDate: _eventDate);
     }
-    return HostEvent(
-      createdAtMs: DateTime.now().millisecondsSinceEpoch,
-      name: '',
-      guests: _guests,
-      eventDate: _eventDate,
-      dishes: withRecipes,
-      guestNotes: guestNotes,
-      prepDays: prepDays,
+    return (
+      HostEvent(
+        createdAtMs: DateTime.now().millisecondsSinceEpoch,
+        name: '',
+        guests: _guests,
+        eventDate: _eventDate,
+        dishes: withRecipes,
+        guestNotes: guestNotes,
+        prepDays: prepDays,
+      ),
+      failed
     );
   }
 
@@ -317,11 +636,14 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
               Text('Pick a dinner date first, or turn off the prep timeline.')));
       return;
     }
-    final HostEvent? event = await withSpinner<HostEvent>(
-        context, 'Building your menu…', _buildMenu);
-    if (event == null || !mounted) {
+    final (HostEvent, List<String>)? built =
+        await withSpinner<(HostEvent, List<String>)>(
+            context, 'Building your menu…', _buildMenu);
+    if (built == null || !mounted) {
       return;
     }
+    final HostEvent event = built.$1;
+    final List<String> failed = built.$2;
     widget.onSave(event); // saved as soon as it's built, so it's never lost
     Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
       builder: (_) => HostResultsScreen(
@@ -333,6 +655,12 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
         onUse: widget.onUse,
       ),
     ));
+    if (failed.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              'The rest are ready. ${failed.join(', ')} didn\'t come back — '
+              'open the dinner and build ${failed.length == 1 ? 'it' : 'them'} again.')));
+    }
   }
 
   @override
@@ -585,6 +913,7 @@ class _HostSetupScreenState extends State<HostSetupScreen> {
 class HostResultsScreen extends StatefulWidget {
   final HostEvent event;
   final List<PantryItem> items;
+  final PriceBook prices;
   final void Function(HostEvent event) onSave;
   final void Function(HostEvent event) onRemove;
   final void Function(Recipe recipe, int servings)? onSaveRecipe;
@@ -594,6 +923,7 @@ class HostResultsScreen extends StatefulWidget {
     super.key,
     required this.event,
     required this.items,
+    this.prices = const PriceBook(),
     required this.onSave,
     required this.onRemove,
     this.onSaveRecipe,
@@ -605,8 +935,10 @@ class HostResultsScreen extends StatefulWidget {
 }
 
 class _HostResultsScreenState extends State<HostResultsScreen> {
-  late final List<bool> _checked =
-      List<bool>.filled(widget.event.allIngredients.length, false);
+  /// Held locally because a dish can be built here (one that failed first
+  /// time round), which changes the menu under the screen.
+  late HostEvent _event = widget.event;
+
   late final TextEditingController _nameCtrl =
       TextEditingController(text: widget.event.name);
   bool _saved = false;
@@ -617,16 +949,57 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
     super.dispose();
   }
 
-  void _toggle(int i) => setState(() => _checked[i] = !_checked[i]);
+  Set<String> get _checked => _event.checked.toSet();
+
+  /// Ticks persist and travel — the list you tick in the shop is the one
+  /// waiting on the iPad at home, same as "On the menu".
+  void _toggle(String key) {
+    final Set<String> next = _checked;
+    if (!next.remove(key)) {
+      next.add(key);
+    }
+    final HostEvent updated = _event.copyWith(checked: next.toList()..sort());
+    setState(() => _event = updated);
+    widget.onSave(updated);
+  }
 
   void _save() {
-    final HostEvent named = widget.event.copyWith(name: _nameCtrl.text.trim());
+    final HostEvent named = _event.copyWith(name: _nameCtrl.text.trim());
     widget.onSave(named);
-    setState(() => _saved = true);
+    setState(() {
+      _event = named;
+      _saved = true;
+    });
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(named.name.isEmpty
             ? 'Saved to Host Hub.'
             : '“${named.name}” saved to Host Hub.')));
+  }
+
+  /// Build a dish the chef didn't manage first time. Keeps the rest of the
+  /// menu exactly as it is.
+  Future<void> _buildDish(int index) async {
+    final HostDish dish = _event.dishes[index];
+    final Recipe? r = await withSpinner<Recipe>(
+      context,
+      'Writing ${dish.text}…',
+      () => Chef.generateHostDish(
+        dish: dish.text,
+        course: dish.course,
+        guests: _event.guests,
+        pantry: widget.items,
+        prices: widget.prices,
+        guestNotes: _event.guestNotes,
+      ),
+    );
+    if (r == null || !mounted) {
+      return;
+    }
+    final List<HostDish> dishes = List<HostDish>.of(_event.dishes);
+    dishes[index] = dish.copyWith(recipe: r);
+    final HostEvent updated = _event.copyWith(dishes: dishes);
+    setState(() => _event = updated);
+    widget.onSave(updated);
   }
 
   Future<void> _delete() async {
@@ -647,7 +1020,7 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
       ),
     );
     if (yes == true && mounted) {
-      widget.onRemove(widget.event);
+      widget.onRemove(_event);
       Navigator.pop(context);
     }
   }
@@ -656,7 +1029,7 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => RecipeScreen(
         recipe: r,
-        initialServings: widget.event.guests,
+        initialServings: _event.guests,
         pantry: widget.items,
         onUse: widget.onUse,
         onSave: widget.onSaveRecipe,
@@ -667,21 +1040,25 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final HostEvent e = widget.event;
+    final HostEvent e = _event;
     final double bottomPad = 32 + MediaQuery.of(context).viewPadding.bottom;
     final double total = e.estCostTotal;
     final double grocery = e.estGroceryCost;
     final List<RecipeIngredient> ingredients = e.allIngredients;
+    // On the iPad this is a cooking surface: the menu, the timeline and the
+    // recipes. Shopping, naming and deleting are the phone's job.
+    final bool cooking = _cookingSurface(context);
     return Scaffold(
       appBar: AppBar(
         title: Text(e.name.trim().isEmpty ? 'Your Menu' : e.name.trim(),
             style: serif(size: 20)),
         actions: <Widget>[
-          IconButton(
-            tooltip: 'Remove this dinner',
-            icon: const Icon(Icons.delete_outline_rounded),
-            onPressed: _delete,
-          ),
+          if (!cooking)
+            IconButton(
+              tooltip: 'Remove this dinner',
+              icon: const Icon(Icons.delete_outline_rounded),
+              onPressed: _delete,
+            ),
         ],
       ),
       body: ListView(
@@ -712,21 +1089,25 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
             ),
             const SizedBox(height: 14),
           ],
-          if (total > 0) ...<Widget>[
+          if (total > 0 && !cooking) ...<Widget>[
             _costCard(total, grocery),
             const SizedBox(height: 14),
           ],
-          for (final HostDish d in e.dishes.where((HostDish d) => d.recipe != null))
-            _dishCard(d),
-          if (e.prepDays.isNotEmpty) ...<Widget>[
+          // The timeline leads on the counter: it's what you're following.
+          if (cooking && e.prepDays.isNotEmpty) _timelineCard(e.prepDays),
+          for (int i = 0; i < e.dishes.length; i++)
+            e.dishes[i].recipe == null
+                ? _unbuiltDishCard(i, e.dishes[i], cooking)
+                : _dishCard(e.dishes[i]),
+          if (!cooking && e.prepDays.isNotEmpty) ...<Widget>[
             _timelineCard(e.prepDays),
             const SizedBox(height: 14),
           ],
-          if (ingredients.isNotEmpty) ...<Widget>[
-            _shoppingCard(ingredients),
+          if (ingredients.isNotEmpty && !cooking) ...<Widget>[
+            _shoppingCard(),
             const SizedBox(height: 14),
           ],
-          _saveCard(),
+          if (!cooking) _saveCard(),
         ],
       ),
     );
@@ -794,6 +1175,41 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
     );
   }
 
+  /// A dish the chef didn't manage — kept on the menu with a way to try it
+  /// again, rather than silently dropped.
+  Widget _unbuiltDishCard(int index, HostDish d, bool cooking) => Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        padding: const EdgeInsets.all(18),
+        decoration: BoxDecoration(
+            color: kCard,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: kWarn.withValues(alpha: 0.6))),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+          Text(d.course.toUpperCase(), style: labelCaps(color: kWarn)),
+          const SizedBox(height: 6),
+          Text(d.text, style: serif(size: 20, weight: FontWeight.w600, height: 1.2)),
+          const SizedBox(height: 6),
+          Text(
+              cooking
+                  ? 'No recipe for this one yet — build it on your phone.'
+                  : 'No recipe yet — the chef didn\'t get to this one.',
+              style: TextStyle(fontSize: 13, color: kMuted, height: 1.4)),
+          if (!cooking) ...<Widget>[
+            const SizedBox(height: 10),
+            OutlinedButton.icon(
+              onPressed: () => _buildDish(index),
+              icon: const Icon(Icons.refresh_rounded, size: 16),
+              label: const Text('Build this dish'),
+              style: OutlinedButton.styleFrom(
+                  foregroundColor: kWarn,
+                  side: BorderSide(color: kWarn.withValues(alpha: 0.6)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10))),
+            ),
+          ],
+        ]),
+      );
+
   Widget _timelineCard(List<PrepDay> days) => Container(
         margin: const EdgeInsets.only(bottom: 14),
         padding: const EdgeInsets.all(18),
@@ -822,7 +1238,7 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
         ]),
       );
 
-  Widget _shoppingCard(List<RecipeIngredient> ingredients) => Container(
+  Widget _shoppingCard() => Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
             color: kCard,
@@ -831,17 +1247,20 @@ class _HostResultsScreenState extends State<HostResultsScreen> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
           Text('Shopping List', style: serif(size: 17, weight: FontWeight.w600)),
           const SizedBox(height: 10),
-          for (int i = 0; i < ingredients.length; i++) _shoppingRow(i, ingredients[i]),
+          for (int d = 0; d < _event.dishes.length; d++)
+            if (_event.dishes[d].recipe != null)
+              for (int i = 0; i < _event.dishes[d].recipe!.ingredients.length; i++)
+                _shoppingRow('$d:$i', _event.dishes[d].recipe!.ingredients[i]),
         ]),
       );
 
-  Widget _shoppingRow(int i, RecipeIngredient ing) {
-    final bool got = _checked[i];
+  Widget _shoppingRow(String key, RecipeIngredient ing) {
+    final bool got = _checked.contains(key);
     final bool newBuy = ing.item.toLowerCase().contains('(new buy)');
     final String label =
         ing.item.replaceAll(RegExp(r'\s*\(new buy\)', caseSensitive: false), '');
     return InkWell(
-      onTap: () => _toggle(i),
+      onTap: () => _toggle(key),
       borderRadius: BorderRadius.circular(10),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
