@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import 'avoid.dart';
 import 'chef_models.dart';
+import 'host_hub.dart';
 import 'liver.dart';
 import 'models.dart';
 import 'pricebook.dart';
@@ -796,6 +797,197 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     return Substitution.fromJson(data);
   }
 
+  // ── Host Hub: cooking for guests — the dish is exactly what the user
+  // typed, scaled to a guest count, with NO diet/health rules attached (see
+  // _hostSystemPrompt: a genuinely separate system prompt, not a user-turn
+  // request fighting the cached one that tells the model the liver rules
+  // "outrank taste, cost and the pantry"). The permanent avoid list still
+  // always applies; [guestNotes] is an additional, event-only set of
+  // restrictions checked the same way and never written back to it.
+  static Future<Recipe> generateHostDish({
+    required String dish,
+    required String course,
+    required int guests,
+    required List<PantryItem> pantry,
+    PriceBook prices = const PriceBook(),
+    String guestNotes = '',
+  }) async {
+    final List<String> avoids = await ChefKeys.getAvoids();
+    final List<String> guestEntries = _splitGuestNotes(guestNotes);
+    final List<String> allAvoids = <String>[...avoids, ...guestEntries];
+    Recipe out = await _askHostDish(
+        dish: dish,
+        course: course,
+        guests: guests,
+        pantry: pantry,
+        prices: prices,
+        guestNotes: guestNotes);
+    List<AvoidHit> hits = recipeAvoidHits(out, allAvoids);
+    if (hits.isNotEmpty) {
+      final Recipe retry = await _askHostDish(
+          dish: dish,
+          course: course,
+          guests: guests,
+          pantry: pantry,
+          prices: prices,
+          guestNotes: guestNotes,
+          complaint: avoidComplaint(hits));
+      final List<AvoidHit> retryHits = recipeAvoidHits(retry, allAvoids);
+      if (retryHits.length < hits.length) {
+        out = retry;
+        hits = retryHits;
+      }
+    }
+    if (hits.isNotEmpty) {
+      throw ChefException('The chef kept using '
+          '${hits.map((AvoidHit h) => h.term).join(', ')} in "$dish", which '
+          'is on your avoid list${guestEntries.isEmpty ? '' : ' or in the '
+              'guest notes'}. Try adjusting the dish or the notes.');
+    }
+    return out;
+  }
+
+  static Future<Recipe> _askHostDish({
+    required String dish,
+    required String course,
+    required int guests,
+    required List<PantryItem> pantry,
+    required PriceBook prices,
+    required String guestNotes,
+    String complaint = '',
+  }) async {
+    final String knownPrices = formatKnownPrices(prices, pantry);
+    final String equipment = formatEquipment(await ChefKeys.getEquipment());
+    final String avoids = formatAvoids(await ChefKeys.getAvoids());
+    final String user = '''
+Write the full recipe for "$dish" (the $course course of a dinner for
+guests), for $guests ${guests == 1 ? 'person' : 'people'}. Measurements in
+GRAMS for anything weighed, counts for count items like eggs, spoons for
+spices, and "to taste" for salt and pepper. Include heat levels, timing, and
+pro tips.
+
+This is a HOSTING occasion — a dinner for guests, not an everyday weeknight
+meal. Cook "$dish" properly, the real way it's made, at the quality a guest
+would expect. Do NOT lighten it, cut its fat or sugar, or simplify it for
+health reasons — there are no calorie, macro or health targets for this
+recipe. Keep every step and ingredient the dish genuinely calls for.
+Every chop, mince, trim and drain the method relies on has to be somewhere
+the cook can see it, in a step or in the ingredient's amount — nothing in a
+step may depend on work never written down.
+
+PANTRY (the complete list of what the user has on hand; prices are per gram
+or per unit):
+${formatPantry(pantry)}
+${knownPrices.isEmpty ? '' : '''
+
+KNOWN PRICES (bought before — use these exact unit prices for these new buys):
+$knownPrices'''}
+
+EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
+with these; never instruct the user to use anything else:
+$equipment
+
+AVOID — the user's own permanent list of foods to keep out. Each entry covers
+its whole group, not just the words written. Nothing else is off limits on
+taste grounds.
+$avoids
+${guestNotes.trim().isEmpty ? '' : '''
+
+GUEST DIETARY NOTES — additional restrictions for THIS dish only, on top of
+the avoid list above, just as hard a rule: ${guestNotes.trim()}'''}
+${complaint.isEmpty ? '' : '''
+
+YOUR LAST ATTEMPT BROKE A RULE: $complaint. Rewrite the recipe without it —
+swap in something that respects every rule above, or adjust the dish.'''}
+
+For every ingredient NOT in that pantry list, append " (new buy)" to its name
+in the ingredients list. Do not imply the user already has anything not
+listed.
+
+For each step, set "timerSeconds" to the number of seconds for any wait/cook/
+rest timer in that step (e.g. 6 minutes = 360). Use 0 when the step has no
+time-based action.
+
+COST: estimate estCostTotal (whole dish), estCostPerServing, and
+estGroceryCost (ONLY the new buys — what the user actually spends at the
+store for this dish), in US dollars. Use the unit prices above; estimate
+typical grocery prices for anything without one. Report cost honestly; never
+let it change the dish — this is for guests.
+
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"title":"","description":"","ingredients":[{"item":"","amount":""}],"steps":[{"title":"","content":"","timerSeconds":0}],"notes":"","estCostTotal":0,"estCostPerServing":0,"estGroceryCost":0}
+"description" is one plain sentence that makes it sound worth serving — what
+it looks and tastes like on the plate. "notes" is one string with protein per
+serving, calories per serving, any new buys, and storage / make-ahead / pro
+tips — no health commentary, this dish isn't being judged against a diet.''';
+
+    final Map<String, dynamic> data = await _post(
+        user: user, maxTokens: 2500, system: _hostSystemPrompt);
+    return Recipe.fromJson(data, baseServings: guests);
+  }
+
+  /// A short day-by-day prep plan working back from the dinner date. Empty
+  /// list on any failure — the menu still stands without it.
+  static Future<List<PrepDay>> generateHostTimeline({
+    required List<HostDish> dishes,
+    required int guests,
+    required String eventDate,
+  }) async {
+    final DateTime today = DateTime.now();
+    final DateTime? event =
+        eventDate.isEmpty ? null : DateTime.tryParse(eventDate);
+    final String dishList = dishes
+        .where((HostDish d) => d.text.trim().isNotEmpty)
+        .map((HostDish d) {
+      final String notes = d.recipe?.notes ?? '';
+      return '- ${d.course}: ${d.text}${notes.isEmpty ? '' : ' — $notes'}';
+    }).join('\n');
+    final String user = '''
+Today is ${_dateStr(today)}. The dinner is ${event == null ? '(no date set — assume it is soon)' : 'on ${_dateStr(event)}'}, for $guests ${guests == 1 ? 'guest' : 'guests'}. Here is the menu:
+$dishList
+
+Write a short day-by-day PREP TIMELINE working backward from the dinner date,
+so the host isn't doing everything the day of. Only plan the days that
+actually matter for make-ahead cooking (usually the last 1 to 3 days before,
+plus the day of) — do not pad it out with empty early days. Each day's tasks
+should be a handful of short, concrete lines (e.g. "Braise the short ribs;
+refrigerate the sauce"), not full recipe steps. The DAY OF should cover final
+cooking, reheating, and plating order. A dish that needs no make-ahead prep
+only shows up on the day-of list.
+
+Respond with ONLY valid JSON, no markdown, in exactly this shape:
+{"days":[{"label":"","tasks":[""]}]}
+"label" is short, e.g. "Thu, Oct 1 — 2 days before" or "Sat, Oct 3 — day of".''';
+
+    try {
+      final Map<String, dynamic> data = await _post(
+          user: user, maxTokens: 1200, system: _hostTimelineSystemPrompt);
+      final List<dynamic> days = (data['days'] as List<dynamic>?) ?? <dynamic>[];
+      return days
+          .whereType<Map<String, dynamic>>()
+          .map((Map<String, dynamic> j) => PrepDay.fromJson(j))
+          .toList();
+    } on ChefException {
+      return const <PrepDay>[];
+    }
+  }
+
+  static List<String> _splitGuestNotes(String notes) => notes
+      .split(RegExp(r'[,;]|\band\b'))
+      .map((String s) => s.trim())
+      .where((String s) => s.isNotEmpty)
+      .toList();
+
+  static const List<String> _kWeekdays = <String>[
+    'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
+  ];
+  static const List<String> _kMonths = <String>[
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  static String _dateStr(DateTime d) =>
+      '${_kWeekdays[d.weekday - 1]}, ${_kMonths[d.month - 1]} ${d.day}';
+
   // ── shared request ────────────────────────────────────────────────────
   /// One call, with a single retry when the reply comes back unreadable.
   ///
@@ -807,20 +999,22 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
   static Future<Map<String, dynamic>> _post({
     required String user,
     required int maxTokens,
+    String? system,
   }) async {
     try {
-      return await _postOnce(user: user, maxTokens: maxTokens);
+      return await _postOnce(user: user, maxTokens: maxTokens, system: system);
     } on ChefException catch (e) {
       if (!e.unreadable) {
         rethrow;
       }
     }
-    return _postOnce(user: user, maxTokens: maxTokens);
+    return _postOnce(user: user, maxTokens: maxTokens, system: system);
   }
 
   static Future<Map<String, dynamic>> _postOnce({
     required String user,
     required int maxTokens,
+    String? system,
   }) async {
     final String key = await ChefKeys.effectiveKey();
     if (key.isEmpty) {
@@ -852,7 +1046,7 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
       'system': <Map<String, dynamic>>[
         <String, dynamic>{
           'type': 'text',
-          'text': _systemPrompt,
+          'text': system ?? _systemPrompt,
           'cache_control': <String, String>{'type': 'ephemeral'},
         }
       ],
@@ -1501,4 +1695,102 @@ ketchup with vinegar and smoked paprika in place of the brown sugar glaze,
 whole wheat panko or almond flour for breading, air fried rather than pan or
 deep fried. Build complementary sides. Support multi-person events and
 breakfast-for-dinner on request, same health rules, unless he says to indulge.
+''';
+
+// ═══════════════════════════════════════════════════════════════════════
+// HOST HUB SYSTEM PROMPT — cooking for guests. Deliberately does NOT
+// inherit _systemPrompt: the fatty liver rules there are stated as hard
+// rules that "outrank taste, cost and the pantry," so a user-turn request to
+// skip them would be fighting the system prompt. This is the whole point of
+// Host Hub — no calorie/macro/health targets, no lightening a dish, cook it
+// the real way. The allergy, avoid list, pantry truth, equipment, cost and
+// recipe-completeness rules all still hold, kept in step with _systemPrompt
+// so the two chefs read like one chef minus the diet.
+// ═══════════════════════════════════════════════════════════════════════
+const String _hostSystemPrompt = '''
+You are the user's personal chef, now helping them cook for a DINNER PARTY —
+guests are coming over. This is a hosting occasion, not an everyday weeknight
+meal: there are NO calorie, macro, weight-loss or fatty-liver targets on
+these recipes. Cook each dish the real way it's meant to be made, at the
+quality a guest would expect. Never lighten, simplify, or cut fat, sugar or
+carbs for health reasons on a hosting recipe.
+
+HARD RULES (never violate):
+- ALLERGY: shrimp. Never use it.
+- AVOID LIST: the user message carries the user's own permanent avoid list —
+  exactly as strict as any other day. Treat it as exhaustive; never add
+  restrictions beyond it, and never quietly omit an ingredient that isn't on
+  it because you assume the user dislikes it.
+- AVOID LIST ENTRIES ARE CATEGORIES, NOT WORDS: an entry rules out every food
+  in that group, not just dishes that spell the entry out.
+- GUEST DIETARY NOTES, when given, are ADDITIONAL hard rules for this one
+  dish only — just as strict as the avoid list, stacked on top of it.
+- EQUIPMENT: the user message lists the appliances actually in this kitchen.
+  Never write a step that needs anything not on that list.
+- Measurements: grams for anything weighed, counts for count items like
+  eggs, spoons for spices, "to taste" for salt and pepper — same convention
+  as any other day, nobody weighs a teaspoon of paprika.
+
+THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH:
+- Treat ONLY the exact items in the pantry list as in-stock. Everything else
+  — including basics like salt, oil, garlic, spices — is a NEW BUY.
+- Append " (new buy)" to any ingredient name that is not in the pantry list.
+
+COST AWARENESS (report honestly; never let it change the dish):
+- Unit prices are given for pantry/known items — use them exactly.
+- Estimate a realistic US grocery price for anything else.
+- This is a dinner for guests: cost is reported so the user can budget for
+  it, never a reason to cut a corner on the dish or swap something cheaper
+  in.
+
+MIRACLE NOODLE RULE: if the dish uses Miracle Noodles, always cook them IN
+the sauce, never prepped separately.
+
+RECIPE OUTPUT FORMAT:
+- title -> description -> ingredients (with amounts) -> numbered steps (each
+  with a short title) -> notes.
+- notes: protein per serving, calories per serving, any new buys, and any
+  storage / make-ahead / pro tips. No health or diet commentary — this dish
+  isn't being judged against one.
+- Steps must be clear and sequential with timing and heat levels. Don't
+  combine conflicting equipment in one step. Include pro tips where they
+  matter (slice against the grain, rest the meat, don't crowd the pan).
+- NO STEP MAY ASSUME WORK AN EARLIER STEP NEVER ASKED FOR. If the method
+  relies on a chop, a mince, a trim or a drain, it has to be somewhere the
+  cook can see it — an earlier step, or written into that ingredient's
+  amount. Read the method back as somebody standing at a cold counter with
+  the shopping done and nothing else.
+- SAY WHEN SOMETHING GOES IN RAW — a seasoned or shaped protein (meatballs,
+  a patty, a stuffing, a marinade) should say so in its own words, not read
+  like it was already cooked in a step you forgot to write.
+
+HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
+rolling boil).
+
+AIR FRYER REFERENCE (use this knowledge):
+- Diced potatoes small (~1cm): 12-15 min @ 200C/400F
+- Diced potatoes medium (~2cm): 18-20 min @ 200C/400F
+- Diced potatoes large (~3cm): 22-25 min @ 200C/400F
+- Potato wedges/fries: 18-20 min @ 200C/400F
+- Whole chicken breast: 20-22 min @ 190C/380F, flip halfway
+- Breaded chicken tenders: 10-12 min @ 200C/400F, flip halfway
+- Always: single layer, don't overcrowd, shake/flip halfway.
+
+TOVALA SMART OVEN REFERENCE (use ONLY if it's listed in EQUIPMENT):
+- Modes: Steam, Bake, Broil, Air Fry, Toast, Reheat. Its real advantage is
+  chaining up to 3 modes into one automated cycle, each with its own time and
+  temperature. Capacity is countertop-sized: single layer, batch if needed.
+
+BEHAVIOR: Behave like a personal chef preparing a real dinner party — real
+technique, real quality, nothing dumbed down or apologized for. Own
+mistakes. Don't ask unnecessary questions. The pantry is the source of
+truth — never assume the user ran out of something they didn't mention.
+''';
+
+/// Lightweight — no recipe-writing rules needed, just a scheduling task.
+const String _hostTimelineSystemPrompt = '''
+You help a home cook plan the days before a dinner party. Be concrete and
+brief — short task lines a busy host can glance at, not full recipes. Never
+invent a dish that wasn't given to you. Respond with ONLY valid JSON, exactly
+as instructed, no markdown.
 ''';
