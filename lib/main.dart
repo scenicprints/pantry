@@ -14,6 +14,7 @@ import 'label_parser.dart';
 import 'models.dart';
 import 'notifications.dart';
 import 'pricebook.dart';
+import 'reclaim.dart';
 import 'spending.dart';
 import 'storage.dart';
 import 'theme.dart';
@@ -28,6 +29,9 @@ import 'updater.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocalCache.init();
+  // Before anything else draws: every installer this app ever downloaded is
+  // still sitting in files/ota_update/ and he cannot clear it himself.
+  await Reclaim.sweep();
   await Notifications.init();
   runApp(const PantryApp());
 }
