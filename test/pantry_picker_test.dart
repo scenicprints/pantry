@@ -103,5 +103,27 @@ void main() {
       expect(matchPantryItem('brown whole grain rice', pantry)?.name,
           'Brown Whole Grain Rice (Mahatma)');
     });
+
+    // The shelf puts words in the MIDDLE of a name. "minced garlic" is not a
+    // substring of "Minced California Garlic", which is why containment alone
+    // found nothing and he re-paired it every cook.
+    test('reaches a name with an extra word buried in it', () {
+      expect(matchPantryItem('minced garlic', pantry)?.name,
+          contains('Minced California Garlic'));
+    });
+
+    test('a plural on the shelf still matches a singular in the recipe', () {
+      expect(matchPantryItem('white onion', pantry)?.name, 'Onions, white, raw');
+    });
+
+    test('picks the closest fit, not merely a fit', () {
+      // Both sirloin and ribeye are steak; only sirloin is in stock.
+      expect(matchPantryItem('top sirloin steak', pantry)?.name,
+          'Beef, top sirloin steak, raw');
+    });
+
+    test('unrelated words do not match', () {
+      expect(matchPantryItem('chocolate', pantry), isNull);
+    });
   });
 }

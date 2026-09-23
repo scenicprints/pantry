@@ -92,8 +92,53 @@ PantryItem? matchPantryItem(String ingredient, List<PantryItem> pantry) {
       }
     }
   }
+  if (best != null) {
+    return best;
+  }
+
+  // Word by word, because the shelf puts things in the middle of the name.
+  // The recipe says "minced garlic" and the jar says "Minced California
+  // Garlic (Kirkland)": every word of the recipe's name is in the jar's, but
+  // neither is a substring of the other, so containment found nothing and he
+  // re-paired garlic by hand on every cook. Plurals are levelled so "onion"
+  // reaches "Onions, white, raw".
+  final Set<String> wantWords = _words(want);
+  if (wantWords.isEmpty) {
+    return null;
+  }
+  int fewestExtra = 1 << 30;
+  for (final PantryItem p in usable) {
+    final Set<String> haveWords = _words(foodKey(p.name));
+    if (haveWords.isEmpty) {
+      continue;
+    }
+    final bool covered = wantWords.every(haveWords.contains) ||
+        haveWords.every(wantWords.contains);
+    if (!covered) {
+      continue;
+    }
+    // The closest fit wins: "Minced California Garlic" carries one word the
+    // recipe did not ask for, and something with five carries five.
+    final int extra = (haveWords.length - wantWords.length).abs();
+    if (extra < fewestExtra) {
+      fewestExtra = extra;
+      best = p;
+    }
+  }
   return best;
 }
+
+/// A food name as a set of words, with plurals levelled so "onions" and
+/// "onion" are the same word. Single letters are dropped as noise.
+Set<String> _words(String key) => key
+    .split(' ')
+    .where((String w) => w.length > 1)
+    .map((String w) => w.endsWith('es') && w.length > 4
+        ? w.substring(0, w.length - 2)
+        : (w.endsWith('s') && w.length > 3
+            ? w.substring(0, w.length - 1)
+            : w))
+    .toSet();
 
 /// One ingredient, and what really went in.
 class CookEntry {
