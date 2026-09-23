@@ -1,0 +1,408 @@
+{
+ "pantry": [
+  {
+   "id": "1789428671583978",
+   "name": "Beef, top sirloin steak, raw",
+   "price": 42.61,
+   "serving_size": 100.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 22.0,
+    "calories": 140.0,
+    "carbs_g": 0.2,
+    "fat_g": 5.7
+   },
+   "macros_per_100g": {
+    "protein_g": 22.0,
+    "calories": 140.0,
+    "carbs_g": 0.2,
+    "fat_g": 5.7
+   },
+   "expiring_soon": false,
+   "date_added": "2026-09-14",
+   "last_price": 42.61,
+   "updated_at_ms": 1790127034844,
+   "category": "Pantry",
+   "total_weight_g": 1487.0,
+   "remaining_weight_g": 439.0,
+   "price_per_gram": 0.0287
+  },
+  {
+   "id": "1784076768931402",
+   "name": "Broccoli (Tesco)",
+   "barcode": "03318003",
+   "price": 3.62,
+   "serving_size": 431.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 2.3,
+    "calories": 27.2,
+    "carbs_g": 5.3,
+    "fat_g": 0.3
+   },
+   "macros_per_100g": {
+    "protein_g": 0.5,
+    "calories": 6.3,
+    "carbs_g": 1.2,
+    "fat_g": 0.1
+   },
+   "expiring_soon": false,
+   "date_added": "2026-07-14",
+   "last_price": 3.62,
+   "updated_at_ms": 1784156279659,
+   "category": "Pantry",
+   "total_weight_g": 431.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0084
+  },
+  {
+   "id": "1785796492806710",
+   "name": "Broccoli, raw",
+   "price": 4.2,
+   "serving_size": 100.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 2.6,
+    "calories": 31.0,
+    "carbs_g": 6.3,
+    "fat_g": 0.3
+   },
+   "macros_per_100g": {
+    "protein_g": 2.6,
+    "calories": 31.0,
+    "carbs_g": 6.3,
+    "fat_g": 0.3
+   },
+   "expiring_soon": false,
+   "date_added": "2026-08-03",
+   "last_price": 4.2,
+   "updated_at_ms": 1785806482058,
+   "category": "Pantry",
+   "total_weight_g": 1280.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0033
+  },
+  {
+   "id": "1785375562689546",
+   "name": "Broccoli, raw",
+   "price": 3.77,
+   "serving_size": 571.5,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 2.6,
+    "calories": 31.0,
+    "carbs_g": 6.3,
+    "fat_g": 0.3
+   },
+   "macros_per_100g": {
+    "protein_g": 0.5,
+    "calories": 5.4,
+    "carbs_g": 1.1,
+    "fat_g": 0.1
+   },
+   "expiring_soon": false,
+   "date_added": "2026-07-29",
+   "last_price": 3.77,
+   "updated_at_ms": 1785383395128,
+   "category": "Pantry",
+   "total_weight_g": 571.5,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0066
+  },
+  {
+   "id": "1789428706283222",
+   "name": "Brown Whole Grain Rice (Mahatma)",
+   "barcode": "017400105358",
+   "price": 3.99,
+   "serving_size": 48.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 3.0,
+    "calories": 181.3,
+    "carbs_g": 32.0,
+    "fat_g": 1.0
+   },
+   "macros_per_100g": {
+    "protein_g": 6.3,
+    "calories": 377.7,
+    "carbs_g": 66.7,
+    "fat_g": 2.1
+   },
+   "expiring_soon": false,
+   "date_added": "2026-09-14",
+   "last_price": 3.99,
+   "updated_at_ms": 1789428706283,
+   "category": "Pantry",
+   "total_weight_g": 960.0,
+   "remaining_weight_g": 960.0,
+   "price_per_gram": 0.0042
+  },
+  {
+   "id": "1784161678917270",
+   "name": "Chuck Tender Steak (Hormel)",
+   "barcode": "0087800023675",
+   "price": 18.6,
+   "serving_size": 301.6,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 19.0,
+    "calories": 119.6,
+    "carbs_g": 1.0,
+    "fat_g": 4.5
+   },
+   "macros_per_100g": {
+    "protein_g": 6.3,
+    "calories": 39.7,
+    "carbs_g": 0.3,
+    "fat_g": 1.5
+   },
+   "expiring_soon": false,
+   "date_added": "2026-07-15",
+   "last_price": 18.6,
+   "updated_at_ms": 1784597296123,
+   "category": "Pantry",
+   "total_weight_g": 603.3,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0308
+  },
+  {
+   "id": "1790034946247821",
+   "name": "Extra Virgin Olive Oil (Sunny Select)",
+   "barcode": "717544118916",
+   "price": 13.0,
+   "serving_size": 15.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 0.0,
+    "calories": 120.0,
+    "carbs_g": 0.0,
+    "fat_g": 14.0
+   },
+   "macros_per_100g": {
+    "protein_g": 0.0,
+    "calories": 800.0,
+    "carbs_g": 0.0,
+    "fat_g": 93.3
+   },
+   "expiring_soon": false,
+   "date_added": "2026-09-21",
+   "last_price": 13.0,
+   "updated_at_ms": 1790127034862,
+   "category": "Pantry",
+   "total_weight_g": 495.0,
+   "remaining_weight_g": 422.4,
+   "price_per_gram": 0.0263
+  },
+  {
+   "id": "1789994464226607",
+   "name": "Garlic Salt (Gel Spice Co.  Inc.)",
+   "barcode": "0076114800379",
+   "price": 0.0,
+   "expiring_soon": false,
+   "date_added": "2026-09-21",
+   "last_price": 0.0,
+   "updated_at_ms": 1789994464226,
+   "category": "Spices",
+   "spice": true,
+   "total_weight_g": 0.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0
+  },
+  {
+   "id": "1783468474202565",
+   "name": "Green Onion",
+   "price": 1.99,
+   "serving_size": 15.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 0.3,
+    "calories": 5.0,
+    "carbs_g": 1.1,
+    "fat_g": 0.0
+   },
+   "macros_per_100g": {
+    "protein_g": 2.0,
+    "calories": 33.3,
+    "carbs_g": 7.3,
+    "fat_g": 0.0
+   },
+   "expiring_soon": false,
+   "date_added": "2026-07-07",
+   "last_price": 1.99,
+   "updated_at_ms": 1783601027916,
+   "category": "Pantry",
+   "total_weight_g": 80.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0249
+  },
+  {
+   "id": "1783349372256642",
+   "name": "Minced California Garlic (Kirkland)",
+   "barcode": "096619581870",
+   "price": 0.0,
+   "expiring_soon": false,
+   "date_added": "2026-07-06",
+   "last_price": 0.0,
+   "updated_at_ms": 1789169379370,
+   "category": "Pantry",
+   "quantity_unknown": true,
+   "total_weight_g": 0.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0
+  },
+  {
+   "id": "1787794030655652",
+   "name": "Onions, green, raw",
+   "price": 0.0,
+   "serving_size": 100.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 1.8,
+    "calories": 32.0,
+    "carbs_g": 7.3,
+    "fat_g": 0.2
+   },
+   "macros_per_100g": {
+    "protein_g": 1.8,
+    "calories": 32.0,
+    "carbs_g": 7.3,
+    "fat_g": 0.2
+   },
+   "expiring_soon": false,
+   "date_added": "2026-08-26",
+   "last_price": 0.0,
+   "updated_at_ms": 1788283920045,
+   "category": "Pantry",
+   "total_weight_g": 90.6,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0
+  },
+  {
+   "id": "1787622507012383",
+   "name": "Onions, red, raw",
+   "price": 1.72,
+   "serving_size": 100.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 0.9,
+    "calories": 44.0,
+    "carbs_g": 9.9,
+    "fat_g": 0.1
+   },
+   "macros_per_100g": {
+    "protein_g": 0.9,
+    "calories": 44.0,
+    "carbs_g": 9.9,
+    "fat_g": 0.1
+   },
+   "expiring_soon": false,
+   "date_added": "2026-08-24",
+   "last_price": 1.72,
+   "updated_at_ms": 1788283914400,
+   "category": "Pantry",
+   "total_weight_g": 316.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0054
+  },
+  {
+   "id": "1788306202772940",
+   "name": "Onions, white, raw",
+   "price": 4.0,
+   "serving_size": 100.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 0.9,
+    "calories": 35.0,
+    "carbs_g": 7.7,
+    "fat_g": 0.1
+   },
+   "macros_per_100g": {
+    "protein_g": 0.9,
+    "calories": 35.0,
+    "carbs_g": 7.7,
+    "fat_g": 0.1
+   },
+   "expiring_soon": false,
+   "date_added": "2026-09-01",
+   "last_price": 4.0,
+   "updated_at_ms": 1790042528553,
+   "category": "Pantry",
+   "total_weight_g": 1683.0,
+   "remaining_weight_g": 850.3,
+   "price_per_gram": 0.0024
+  },
+  {
+   "id": "1784076626243674",
+   "name": "Pasture Raised Beef Ribeye Steak",
+   "barcode": "250124709352",
+   "price": 9.35,
+   "serving_size": 340.2,
+   "serving_unit": "g",
+   "expiring_soon": false,
+   "date_added": "2026-07-14",
+   "last_price": 9.35,
+   "updated_at_ms": 1784156317240,
+   "category": "Pantry",
+   "total_weight_g": 340.2,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0275
+  },
+  {
+   "id": "1789435713670303",
+   "name": "Soy Sauce (Kikkoman)",
+   "barcode": "041390001109",
+   "price": 0.0,
+   "expiring_soon": false,
+   "date_added": "2026-09-14",
+   "last_price": 0.0,
+   "updated_at_ms": 1789435713670,
+   "category": "Pantry",
+   "quantity_unknown": true,
+   "total_weight_g": 0.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0
+  },
+  {
+   "id": "1789994408103733",
+   "name": "Spices, onion powder",
+   "price": 0.0,
+   "expiring_soon": false,
+   "date_added": "2026-09-21",
+   "last_price": 0.0,
+   "updated_at_ms": 1789994408103,
+   "category": "Spices",
+   "spice": true,
+   "total_weight_g": 0.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0
+  },
+  {
+   "id": "1783468342307182",
+   "name": "Vidalia Sweet Onions (Bland Farms)",
+   "barcode": "717311000260",
+   "price": 5.99,
+   "serving_size": 148.0,
+   "serving_unit": "g",
+   "macros_per_serving": {
+    "protein_g": 2.0,
+    "calories": 60.8,
+    "carbs_g": 14.0,
+    "fat_g": 0.0
+   },
+   "macros_per_100g": {
+    "protein_g": 1.4,
+    "calories": 41.1,
+    "carbs_g": 9.5,
+    "fat_g": 0.0
+   },
+   "expiring_soon": false,
+   "date_added": "2026-07-07",
+   "last_price": 5.99,
+   "updated_at_ms": 1789128880610,
+   "category": "Pantry",
+   "total_weight_g": 3294.0,
+   "remaining_weight_g": 0.0,
+   "price_per_gram": 0.0018
+  }
+ ]
+}

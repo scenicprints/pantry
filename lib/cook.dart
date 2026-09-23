@@ -3605,19 +3605,8 @@ class _PantryPickerSheetState extends State<PantryPickerSheet> {
   /// cook wants to say he used them; nothing is subtracted for them, which is
   /// already how untracked items behave everywhere else. Hiding them left him
   /// with no way to record the soy sauce at all.
-  List<PantryItem> get _matches {
-    final String q = _q.text.trim().toLowerCase();
-    final List<PantryItem> all = widget.pantry
-        .where((PantryItem p) =>
-            !p.deleted &&
-            (_includeEmpty || p.remaining > 0 || p.untracked))
-        .where((PantryItem p) =>
-            q.isEmpty || p.name.toLowerCase().contains(q))
-        .toList()
-      ..sort((PantryItem a, PantryItem b) =>
-          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-    return all;
-  }
+  List<PantryItem> get _matches => pickablePantry(widget.pantry,
+      query: _q.text, includeEmpty: _includeEmpty);
 
   int get _emptyCount => widget.pantry
       .where((PantryItem p) =>
@@ -4059,7 +4048,7 @@ class _PrepScreenState extends State<PrepScreen>
     List<Widget> buildCards() {
       final PrepPlan? plan = _s.plan;
       final List<Widget> cards = <Widget>[];
-      final Set<String> placed = <String>{};
+      final Set<CookEntry> placed = <CookEntry>{};
       if (plan != null) {
         for (int b = 0; b < plan.bowls.length; b++) {
           cards.add(_bowlCard(plan.bowls[b], placed));
@@ -4067,7 +4056,7 @@ class _PrepScreenState extends State<PrepScreen>
       }
       // Anything the plan didn't mention still has to be weighable.
       final List<CookEntry> rest = _s.entries
-          .where((CookEntry e) => !placed.contains(foodKey(e.item)))
+          .where((CookEntry e) => !placed.contains(e))
           .toList();
       if (rest.isNotEmpty) {
         cards.add(_card(plan == null ? 'Ingredients' : 'Everything else',
@@ -4117,26 +4106,29 @@ class _PrepScreenState extends State<PrepScreen>
     ]);
   }
 
-  Widget _bowlCard(PrepBowl b, Set<String> placed) {
+  Widget _bowlCard(PrepBowl b, Set<CookEntry> placed) {
     final List<Widget> rows = <Widget>[];
     for (final PrepItem i in b.items) {
-      final CookEntry? e = _s.byName(i.item);
-      if (e == null) {
+      // Per bowl, not per name: oil used in two bowls is two entries with two
+      // weights, and each bowl must show its own.
+      final CookEntry? e = _s.inBowl(b.label, i.item);
+      if (e == null || placed.contains(e)) {
         continue;
       }
-      placed.add(foodKey(e.item));
+      placed.add(e);
+      final String tick = '${b.label}|${e.item}';
       rows.add(Row(children: <Widget>[
         InkWell(
           borderRadius: BorderRadius.circular(6),
-          onTap: () => _toggle(e.item),
+          onTap: () => _toggle(tick),
           child: Padding(
             padding: const EdgeInsets.only(left: 14, top: 10, bottom: 10),
             child: Icon(
-                _done.contains(e.item)
+                _done.contains(tick)
                     ? Icons.check_box_rounded
                     : Icons.check_box_outline_blank_rounded,
                 size: 22,
-                color: _done.contains(e.item) ? kOlive : kFaint),
+                color: _done.contains(tick) ? kOlive : kFaint),
           ),
         ),
         Expanded(

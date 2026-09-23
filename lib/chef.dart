@@ -534,8 +534,9 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
     final String user = '''
 Write the full recipe for "${option.title}" (${option.desc}) for $servings
 ${servings == 1 ? 'person' : 'people'}. Measurements in GRAMS for anything
-weighed, counts for count items like eggs, spoons for spices, and "to taste"
-for salt and pepper. Cook Miracle Noodles IN the sauce if used. Include heat
+weighed, counts for count items like eggs, spoons ONLY for salt, pepper and
+dried ground spices, and "to taste" for salt and pepper. Oil, minced garlic,
+pastes and sauces are weighed, so they are in grams, never tablespoons. Cook Miracle Noodles IN the sauce if used. Include heat
 levels, timing, and pro tips. Follow every user rule and the recipe format.
 Keep it as simple as the dish honestly allows: as few ingredients as the dish
 actually needs, and no technique a home cook on a weeknight wouldn't use. Do
@@ -648,7 +649,9 @@ $knownPrices'''}
 $equipment
 $avoids
 Measurements in GRAMS for anything weighed, counts for count items like eggs,
-spoons for spices, and "to taste" for salt and pepper. Follow every user rule
+spoons ONLY for salt, pepper and dried ground spices, and "to taste" for salt
+and pepper. Oil, minced garlic, pastes and sauces go in grams. Follow every
+user rule
 and the recipe format. Keep it as simple as the dish honestly allows.
 
 COST: estimate estCostTotal (whole recipe), estCostPerServing, and
@@ -722,9 +725,21 @@ SEPARATE ONLY FOR THESE:
 - An ingredient the method adds in stages, where part goes in early and part
   goes in later. Split it the way the method splits it.
 
-An ingredient that shares with nothing still gets its own bowl. Every
-ingredient below must appear exactly once across the bowls, none dropped, none
-repeated.
+AN INGREDIENT USED AT TWO DIFFERENT MOMENTS IS TWO SEPARATE AMOUNTS. This is
+the one that keeps going wrong. If the recipe uses 30 g of olive oil, some for
+the pan and some tossed through the vegetables, you may NOT put "olive oil,
+30 g" in the vegetable bowl and then expect the pan to draw from it. Once it is
+poured over the vegetables it is gone, and there is no getting it back.
+
+So when an ingredient is needed in more than one place, give it a line in EACH
+bowl that needs it, and split the amount between them so the lines add up to
+the recipe's total: "olive oil, 15 g" in one, "olive oil, 15 g" in the other.
+Every line's amount is what THAT bowl needs and nothing more. No bowl ever
+takes from another bowl's line.
+
+An ingredient that shares with nothing still gets its own bowl. Apart from a
+split like the one above, every ingredient below appears exactly once across
+the bowls, none dropped.
 
 BEFORE YOU ANSWER, read your own bowls back against the steps. Find every place
 two of them are emptied into the same thing at the same moment with nothing
@@ -871,7 +886,8 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
 Write the full recipe for "$dish" (the $course course of a dinner for
 guests), for $guests ${guests == 1 ? 'person' : 'people'}. Measurements in
 GRAMS for anything weighed, counts for count items like eggs, spoons for
-spices, and "to taste" for salt and pepper. Include heat levels, timing, and
+dried ground spices only, and "to taste" for salt and pepper. Oil, minced
+garlic, pastes and sauces go in grams. Include heat levels, timing, and
 pro tips.
 
 This is a HOSTING occasion — a dinner for guests, not an everyday weeknight
@@ -1588,12 +1604,20 @@ USER PROFILE (hard rules — never violate):
   exercise. He notices the grocery bill, so don't be wasteful; but a dinner
   worth eating is worth paying the ordinary price for. Where cost and the liver
   rules pull against each other, the liver wins.
-- Measurements: grams (never oz) for anything that gets weighed — proteins,
-  vegetables, grains, legumes, dairy, oil. Count items like eggs stay as counts.
-  Salt, pepper and dried spices do NOT go in grams; nobody weighs them. Use
-  teaspoons and tablespoons for spices, and "to taste" for salt and pepper. The
-  exception is where the amount genuinely has to be exact — a brine, a cure, or
-  anything baked — and there grams are right.
+- Measurements: grams (never oz) for anything that goes on a scale, which is
+  nearly everything. Proteins, vegetables, grains, legumes, dairy, and OIL.
+  Count items like eggs stay as counts.
+- SPOONS ARE ONLY FOR DRY SEASONING. Teaspoons and tablespoons are for salt,
+  pepper and DRIED GROUND SPICES, and nothing else. Use "to taste" for salt
+  and pepper.
+  Everything that pours, spoons or scoops out of a jar goes in GRAMS: olive
+  oil, minced garlic, ginger paste, tomato paste, soy sauce, vinegar, mustard,
+  tahini, yogurt, stock, honey, nut butter. He weighs these on the scale and
+  the app records what the scale said, so a tablespoon is a number he then has
+  to guess at. Olive oil in particular is never a tablespoon: the liver rules
+  make you state its grams.
+  The one exception runs the other way: where an amount has to be exact, in a
+  brine, a cure or anything baked, grams are right even for a spice.
 
 FATTY LIVER RULES (hard rules — they outrank taste, cost and the pantry):
 Cooking for this liver is a Mediterranean pattern: vegetables and legumes in
@@ -1755,8 +1779,11 @@ ingredients proportionally and adjust servings. Note when air frying must be
 done in batches due to volume.
 
 RECIPE OUTPUT FORMAT:
-- Grams for anything weighed, counts for count items, spoons for spices, and
-  "to taste" for salt and pepper. Never grams of salt, pepper or dried spice
+- Grams for anything weighed, counts for count items, spoons for salt, pepper
+  and dried ground spices ONLY, and "to taste" for salt and pepper. Anything
+  that pours or scoops out of a jar is weighed: oil, minced garlic, pastes,
+  sauces, yogurt, honey, nut butter. Never grams of salt, pepper or dried
+  spice
   outside a brine, a cure or a bake.
 - title -> description -> ingredients (with amounts) -> numbered steps (each
   with a short title) -> notes.
@@ -1789,6 +1816,16 @@ RECIPE OUTPUT FORMAT:
   obvious moves. It does NOT mean folding three real jobs into one line or
   skipping the prep. Where cutting a step would make the cook guess, keep the
   step.
+- THE STEPS ARE IN THE ORDER THEY HAPPEN, AND NOTHING IS DONE TWICE. The last
+  recipe told him to cut the steak, sear it, and then cut it again. Decide
+  once when a thing gets cut and write it there. A steak is either cut into
+  pieces BEFORE it goes in the pan, or seared whole and sliced AFTER it rests,
+  never both. The same goes for seasoning, oiling and draining.
+  Track the state of every ingredient as you write. Once something has been
+  cut, cooked, drained or seasoned, later steps refer to it in that state and
+  never ask for the work again. Before you answer, read the method through in
+  order as though you were doing it, and if any step asks for something that
+  already happened, delete it.
 
 HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
 rolling boil).
@@ -1869,7 +1906,8 @@ HARD RULES (never violate):
 - EQUIPMENT: the user message lists the appliances actually in this kitchen.
   Never write a step that needs anything not on that list.
 - Measurements: grams for anything weighed, counts for count items like
-  eggs, spoons for spices, "to taste" for salt and pepper — same convention
+  eggs, spoons for dried spices only, grams for oil and anything that pours,
+  "to taste" for salt and pepper — same convention
   as any other day, nobody weighs a teaspoon of paprika.
 
 THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH:
