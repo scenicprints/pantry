@@ -72,9 +72,19 @@ void main() {
       expect(gramsFor('White onion', '2'), 220.0);
     });
 
-    test('eggs stay a count', () {
-      expect(gramsFor('Eggs', '2'), isNull);
-      expect(gramsFor('Tortillas', '4'), isNull);
+    // These were once excluded as "things you say as a count". How you say it
+    // and what the scale reads are different questions, and it is the scale
+    // that goes to BodyComp.
+    test('eggs and tortillas are weighed like everything else', () {
+      expect(gramsFor('Eggs', '2'), 100.0);
+      expect(gramsFor('Corn tortillas', '4'), 104.0);
+      expect(gramsFor('Flour tortilla', '1'), 45.0);
+    });
+
+    test('only salt, pepper and dried spices stay unweighed', () {
+      expect(gramsFor('Salt', '1 tsp'), isNull);
+      expect(gramsFor('Eggs', '2'), isNotNull);
+      expect(gramsFor('Tortillas', '2'), isNotNull);
     });
 
     test('something with no sensible weight stays blank', () {
@@ -116,10 +126,20 @@ void main() {
       expect(isSeasoning('Minced garlic'), isFalse);
     });
 
-    test('counted things are recognised', () {
-      expect(staysACount('Large eggs'), isTrue);
-      expect(staysACount('Corn tortillas'), isTrue);
-      expect(staysACount('Onion'), isFalse);
+    test('the label beats the table', () {
+      // A table says a tortilla is 32 g. His packet says 41 g, and his packet
+      // is right.
+      expect(gramsFor('Tortillas', '2', servingSize: 41, servingUnit: 'g'),
+          82.0);
+      expect(gramsFor('Eggs', '1', servingSize: 56, servingUnit: 'g'), 56.0);
+    });
+
+    test('a serving size that is not grams is ignored', () {
+      // "1 cookie" or "0.25 cup" says nothing about what one piece weighs.
+      expect(gramsFor('Eggs', '2', servingSize: 1, servingUnit: 'egg'), 100.0);
+      expect(
+          gramsFor('Tortillas', '2', servingSize: 0.25, servingUnit: 'cup'),
+          64.0);
     });
   });
 }

@@ -204,7 +204,7 @@ class CookSession extends ChangeNotifier {
         // Prefilled where the recipe already spoke in grams, so an untouched
         // line still sends something true. Blank otherwise rather than
         // guessing what 2 tsp weighs.
-        grams: TextEditingController(text: _prefill(i.item, amount)),
+        grams: TextEditingController(text: _prefill(i.item, amount, match)),
         pantryId: match?.id ?? '',
       ));
     }
@@ -219,8 +219,10 @@ class CookSession extends ChangeNotifier {
   /// app can honestly turn into grams: a tablespoon of oil, two cloves of
   /// garlic, half a cup of stock. Blank for a seasoning or anything without a
   /// sensible weight, because a blank box beats a number nobody stands behind.
-  static String _prefill(String item, String amount) {
-    final double? g = gramsFor(item, amount);
+  static String _prefill(String item, String amount, [PantryItem? from]) {
+    final double? g = gramsFor(item, amount,
+        servingSize: from?.servingSize ?? 0,
+        servingUnit: from?.servingUnit ?? '');
     return g == null ? '' : _trim(g);
   }
 
@@ -303,8 +305,9 @@ class CookSession extends ChangeNotifier {
       // non-empty field as his would hand the first bowl the whole 30 g and
       // the portions would no longer add up. Only a value that differs from
       // the prefill is his, and only that survives.
+      final PantryItem? from = pantryFor(e);
       final bool hisOwn =
-          e.grams.text.trim() != _prefill(e.item, e.recipeAmount);
+          e.grams.text.trim() != _prefill(e.item, e.recipeAmount, from);
       for (int n = 0; n < uses.length; n++) {
         final (PrepBowl b, PrepItem i) = uses[n];
         final String amount = i.amount.isEmpty ? e.recipeAmount : i.amount;
@@ -315,7 +318,7 @@ class CookSession extends ChangeNotifier {
           pantryId: e.pantryId,
           grams: n == 0 && hisOwn
               ? e.grams
-              : TextEditingController(text: _prefill(e.item, amount)),
+              : TextEditingController(text: _prefill(e.item, amount, from)),
         ));
       }
     }

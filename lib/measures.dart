@@ -13,9 +13,14 @@ import 'chef_models.dart';
 // well the prompt behaves afterwards. A rule the app depends on but cannot
 // enforce is not a rule, so the conversion lives here instead.
 //
-// WHAT IS NOT CONVERTED. Salt, pepper and dried ground spices stay in spoons,
-// because nobody weighs a pinch of cumin and he has said so plainly. Eggs and
-// the other things that genuinely come in pieces stay as counts.
+// WHAT IS NOT CONVERTED. Salt, pepper and dried ground spices, and nothing
+// else. That is the whole exception, because nobody weighs a pinch of cumin
+// and he has said so plainly.
+//
+// Eggs and tortillas used to be excluded too, on the grounds that a count is
+// how anyone would say it. That confused two questions. How you SAY it and
+// what the scale reads are different things, and it is the scale that goes to
+// BodyComp, where an egg most certainly has a weight. They are converted.
 //
 // These are estimates, and the number in the field is only a starting point:
 // he tares, weighs, and what he types replaces it. An estimate he can correct
@@ -134,25 +139,20 @@ const Map<String, double> _perPiece = <String, double>{
   'mushroom': 18.0,
   'chicken breast': 174.0,
   'chicken thigh': 82.0,
+  // These were once excluded on the grounds that a count is how you say it.
+  // How you SAY it and what the scale reads are different questions, and it
+  // is the scale that goes to BodyComp. An egg has a weight.
+  'egg': 50.0,
+  'corn tortilla': 26.0,
+  'flour tortilla': 45.0,
+  'tortilla': 32.0,
+  'pita': 60.0,
+  'naan': 90.0,
+  'bun': 55.0,
+  'slice of bread': 28.0,
+  'bread': 28.0,
 };
 
-/// Things that stay a count, because a count is how anyone would say it.
-const List<String> _countedAnyway = <String>[
-  'egg',
-  'tortilla',
-  'bun',
-  'roll',
-  'slice',
-  'sheet',
-  'wrap',
-  'pita',
-  'naan',
-  'bay leaf',
-  'skewer',
-  'can',
-  'jar',
-  'packet',
-];
 
 String _norm(String s) => s.toLowerCase().replaceAll(RegExp('[^a-z ]+'), ' ');
 
@@ -164,9 +164,6 @@ bool _mentions(String item, Iterable<String> words) {
 /// True when this ingredient is a dried seasoning, so spoons are right and
 /// weighing it would be the wrong thing to ask for.
 bool isSeasoning(String item) => _mentions(item, _seasonings);
-
-/// True when a count is the honest way to say it.
-bool staysACount(String item) => _mentions(item, _countedAnyway);
 
 /// The longest key that appears in [item] wins, so "minced garlic" beats
 /// "garlic" and "tomato paste" beats "paste".
@@ -183,8 +180,28 @@ double? _lookup(String item, Map<String, double> table) {
   return best;
 }
 
+/// Grams for one piece of a counted thing, taken from the product he actually
+/// bought. His carton says what one egg weighs, and that beats any table in
+/// this file. [servingUnit] has to be grams for the number to mean anything.
+double? _fromLabel(double servingSize, String servingUnit) {
+  if (servingSize <= 0) {
+    return null;
+  }
+  final String u = servingUnit.trim().toLowerCase();
+  return (u == 'g' || u == 'gram' || u == 'grams') ? servingSize : null;
+}
+
 /// What [amount] of [item] weighs, or null when there is no honest answer.
-double? gramsFor(String item, String amount) {
+///
+/// [servingSize] and [servingUnit] come from the linked pantry item when there
+/// is one. For a count they are the better answer: a table says a tortilla is
+/// 32 g, his packet says 41 g, and his packet is right.
+double? gramsFor(
+  String item,
+  String amount, {
+  double servingSize = 0,
+  String servingUnit = '',
+}) {
   if (isGramAmount(amount)) {
     return amountValue(amount);
   }
@@ -231,11 +248,12 @@ double? gramsFor(String item, String amount) {
       RegExp('^(clove|cloves|piece|pieces|medium|large|small|whole|'
               'head|heads|stalk|stalks|sprig|sprigs)')
           .hasMatch(unit);
-  if (!bareOrPiece || staysACount(item)) {
+  if (!bareOrPiece) {
     return null;
   }
-  final double? each =
-      _lookup('$unit $item', _perPiece) ?? _lookup(item, _perPiece);
+  final double? each = _fromLabel(servingSize, servingUnit) ??
+      _lookup('$unit $item', _perPiece) ??
+      _lookup(item, _perPiece);
   return each == null ? null : _round(n * each);
 }
 
