@@ -3468,7 +3468,16 @@ class CookWeightRow extends StatelessWidget {
               children: <Widget>[
                 Text(entry.item,
                     style: const TextStyle(fontSize: 15.5, color: kInk)),
-                if (prep.isNotEmpty)
+                // Where a converted number came from. The field says 13.6 g
+                // and the recipe said "1 tbsp"; showing both means he can see
+                // it is an estimate to correct, not a reading off a scale.
+                if (!entry.startedFromRecipe && entry.recipeAmount.isNotEmpty)
+                  Text(
+                      prep.isEmpty
+                          ? entry.recipeAmount
+                          : '${entry.recipeAmount} · $prep',
+                      style: mono(size: 12, color: kFaint))
+                else if (prep.isNotEmpty)
                   Text(prep, style: TextStyle(fontSize: 12.5, color: kMuted)),
                 const SizedBox(height: 5),
                 _linkChip(context, link),

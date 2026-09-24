@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'chef_models.dart';
+import 'measures.dart';
 import 'models.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -203,7 +204,7 @@ class CookSession extends ChangeNotifier {
         // Prefilled where the recipe already spoke in grams, so an untouched
         // line still sends something true. Blank otherwise rather than
         // guessing what 2 tsp weighs.
-        grams: TextEditingController(text: _prefill(amount)),
+        grams: TextEditingController(text: _prefill(i.item, amount)),
         pantryId: match?.id ?? '',
       ));
     }
@@ -212,10 +213,16 @@ class CookSession extends ChangeNotifier {
   static String _trim(double v) =>
       v == v.roundToDouble() ? v.toInt().toString() : v.toStringAsFixed(1);
 
-  /// What the field starts as for [amount]: the number when the recipe spoke
-  /// in grams, blank otherwise rather than guessing what 2 tsp weighs.
-  static String _prefill(String amount) =>
-      isGramAmount(amount) ? _trim(amountValue(amount) ?? 0) : '';
+  /// What the field starts as for [amount] of [item].
+  ///
+  /// Grams when the recipe said grams, and grams when it said something the
+  /// app can honestly turn into grams: a tablespoon of oil, two cloves of
+  /// garlic, half a cup of stock. Blank for a seasoning or anything without a
+  /// sensible weight, because a blank box beats a number nobody stands behind.
+  static String _prefill(String item, String amount) {
+    final double? g = gramsFor(item, amount);
+    return g == null ? '' : _trim(g);
+  }
 
   CookEntry? byName(String name) {
     final String want = foodKey(name);
@@ -296,7 +303,8 @@ class CookSession extends ChangeNotifier {
       // non-empty field as his would hand the first bowl the whole 30 g and
       // the portions would no longer add up. Only a value that differs from
       // the prefill is his, and only that survives.
-      final bool hisOwn = e.grams.text.trim() != _prefill(e.recipeAmount);
+      final bool hisOwn =
+          e.grams.text.trim() != _prefill(e.item, e.recipeAmount);
       for (int n = 0; n < uses.length; n++) {
         final (PrepBowl b, PrepItem i) = uses[n];
         final String amount = i.amount.isEmpty ? e.recipeAmount : i.amount;
@@ -307,7 +315,7 @@ class CookSession extends ChangeNotifier {
           pantryId: e.pantryId,
           grams: n == 0 && hisOwn
               ? e.grams
-              : TextEditingController(text: _prefill(amount)),
+              : TextEditingController(text: _prefill(e.item, amount)),
         ));
       }
     }

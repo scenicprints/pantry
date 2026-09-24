@@ -1857,6 +1857,15 @@ TOVALA SMART OVEN REFERENCE (use ONLY if it's listed in EQUIPMENT):
 - Capacity is countertop-sized: single layer, don't crowd, batch if needed.
 - Don't use it as a plain oven when a steam->bake->broil cycle would cook the
   same dish better.
+- NEVER SEND AIR FRYING TO THE TOVALA WHEN AN AIR FRYER IS ON THE EQUIPMENT
+  LIST. It has an Air Fry mode and that is not the point: the air fryer is
+  bigger, hotter and better at it, and the air fryer times in this prompt are
+  written for the air fryer. The Tovala earns its place with the chained
+  steam-then-brown cycle that nothing else here can do, not by standing in for
+  an appliance he already owns and would rather use.
+- The same rule for every appliance. When two of them can do a job, name the
+  one that does it best and say which. Never hand a task to a device because
+  it happens to have a mode with the right name on it.
 
 STANDARD BREADING STATION: whole wheat flour or almond flour (seasoned) ->
 beaten egg or egg white -> whole wheat panko + a little parmesan. Air fry it
