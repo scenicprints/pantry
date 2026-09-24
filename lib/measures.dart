@@ -106,6 +106,9 @@ const List<String> _seasonings = <String>[
 const Map<String, double> _perPiece = <String, double>{
   'garlic clove': 3.0,
   'clove garlic': 3.0,
+  // A bare "garlic" counted in pieces is a clove; "2 cloves" and "2 cloves
+  // garlic" both have to land here.
+  'garlic': 3.0,
   'shallot': 40.0,
   'onion': 110.0,
   'scallion': 15.0,

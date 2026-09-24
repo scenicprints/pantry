@@ -90,8 +90,9 @@ void main() {
     });
 
     test('other weight units are converted', () {
-      expect(gramsFor('Beef', '1 lb'), 453.6);
-      expect(gramsFor('Beef', '8 oz'), 226.8);
+      // Whole grams above 100, because that is what the scale shows.
+      expect(gramsFor('Beef', '1 lb'), 454.0);
+      expect(gramsFor('Beef', '8 oz'), 227.0);
       expect(gramsFor('Beef', '1.2 kg'), 1200.0);
     });
 
