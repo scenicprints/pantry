@@ -32,7 +32,7 @@ import 'pricebook.dart';
 
 const String kChefModelHaiku = 'claude-haiku-4-5';
 const String kChefModelSonnet = 'claude-sonnet-4-6';
-const String kChefModelOpus = 'claude-opus-5';
+const String kChefModelOpus = 'claude-opus-4-8';
 
 // ═══════════════════════════════════════════════════════════════════════
 // EQUIPMENT — what the user actually cooks with. The chef used to have this
@@ -598,7 +598,8 @@ saturated fat, added sugar and fiber per serving, any new buys, storage/pro
 tips, and one short line on how the dish sits with the fatty liver. Cost fields
 are numbers in dollars (e.g. 12.75).''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    final Map<String, dynamic> data =
+        await _post(user: user, maxTokens: 2500, think: true);
     return Recipe.fromJson(data, baseServings: servings);
   }
 
@@ -663,7 +664,8 @@ saturated fat, added sugar and fiber per serving, any new buys, storage/pro
 tips, one short line on how the dish sits with the fatty liver, and one short
 line saying what you changed and why.''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    final Map<String, dynamic> data =
+        await _post(user: user, maxTokens: 2500, think: true);
     return Recipe.fromJson(data, baseServings: servings);
   }
 
@@ -771,7 +773,8 @@ $steps
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"bowls":[{"label":"","step":0,"items":[{"item":"","amount":"","prep":""}]}],"cookGroups":[{"name":"","items":[""]}]}''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2500);
+    final Map<String, dynamic> data =
+        await _post(user: user, maxTokens: 2500, think: true);
     return PrepPlan.fromJson(data, baseServings: recipe.baseServings);
   }
 
@@ -807,7 +810,8 @@ $avoids
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
 {"use":"","note":"","fromPantry":false}''';
 
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 600);
+    final Map<String, dynamic> data =
+        await _post(user: user, maxTokens: 600, think: true);
     return Substitution.fromJson(data);
   }
 
@@ -956,7 +960,7 @@ serving, calories per serving, any new buys, and storage / make-ahead / pro
 tips — no health commentary, this dish isn't being judged against a diet.''';
 
     final Map<String, dynamic> data = await _post(
-        user: user, maxTokens: 2500, system: _hostSystemPrompt);
+        user: user, maxTokens: 2500, system: _hostSystemPrompt, think: true);
     return Recipe.fromJson(data, baseServings: guests);
   }
 
@@ -1044,7 +1048,10 @@ the dinner rather than to one dish.'''
 
     try {
       final Map<String, dynamic> data = await _post(
-          user: user, maxTokens: 2000, system: _hostTimelineSystemPrompt);
+          user: user,
+          maxTokens: 2000,
+          system: _hostTimelineSystemPrompt,
+          think: true);
       final List<dynamic> days = (data['days'] as List<dynamic>?) ?? <dynamic>[];
       return days
           .whereType<Map<String, dynamic>>()
@@ -1109,7 +1116,8 @@ seconds for any wait/cook/rest in that step, 0 when there is none.''';
       final Map<String, dynamic> data = await _post(
           user: user,
           maxTokens: 3000,
-          system: _hostTimelineSystemPrompt);
+          system: _hostTimelineSystemPrompt,
+          think: true);
       final List<dynamic> steps = (data['steps'] as List<dynamic>?) ?? <dynamic>[];
       return steps
           .whereType<Map<String, dynamic>>()
@@ -1156,21 +1164,25 @@ seconds for any wait/cook/rest in that step, 0 when there is none.''';
     required String user,
     required int maxTokens,
     String? system,
+    bool think = false,
   }) async {
     try {
-      return await _postOnce(user: user, maxTokens: maxTokens, system: system);
+      return await _postOnce(
+          user: user, maxTokens: maxTokens, system: system, think: think);
     } on ChefException catch (e) {
       if (!e.unreadable) {
         rethrow;
       }
     }
-    return _postOnce(user: user, maxTokens: maxTokens, system: system);
+    return _postOnce(
+        user: user, maxTokens: maxTokens, system: system, think: think);
   }
 
   static Future<Map<String, dynamic>> _postOnce({
     required String user,
     required int maxTokens,
     String? system,
+    bool think = false,
   }) async {
     final String key = await ChefKeys.effectiveKey();
     if (key.isEmpty) {
@@ -1178,26 +1190,31 @@ seconds for any wait/cook/rest in that step, 0 when there is none.''';
     }
     final String model = await ChefKeys.getModelId();
 
-    // Opus 5 THINKS BY DEFAULT; opus-4-8, which it replaced, did not. Thinking
-    // tokens are spent out of max_tokens, so a budget that comfortably held
-    // the options before now has to cover the reasoning as well, and when it
-    // runs out the JSON is truncated mid-object and the reply is unreadable.
+    // WHICH CALLS REASON BEFORE ANSWERING, AND WHY IT IS PER CALL.
     //
-    // THAT IS NOT A REASON TO CAP THE THINKING. Pinning the calls to low
-    // effort stopped the truncation and quietly wrecked the cooking: a recipe
-    // whose prep was folded away, and a mise en place that had him weigh the
-    // meat and the onion into two bowls and tip them together a second later.
+    // Opus 5 thought on every request whether we asked or not, and the wait
+    // showed up where it is least welcome: "Cook something", where he is
+    // standing in the kitchen waiting to be shown three one-line ideas. Three
+    // short descriptions do not need a reasoning pass. The recipe he then
+    // follows at the counter does, and capping that is what wrecked the
+    // cooking last time — a recipe whose prep was folded away, and a mise en
+    // place that had him weigh the meat and the onion into two bowls and tip
+    // them together a second later.
     //
-    // There is no cheap call here. Every one of them is a judgement about food
-    // that a person then stands at a counter and follows, and the two that
-    // LOOKED mechanical, grouping the bowls and finding a swap for something
-    // he has run out of, are the two he has actually called bad. So there is
-    // no effort cap anywhere, and the budget is wide enough to hold the
-    // reasoning rather than truncating the JSON behind it.
-    final bool thinks = _thinksByDefault(model);
+    // opus-4-8 takes thinking as an opt-in, so the two needs stop fighting:
+    // the options call asks for none, and every other call — recipes, the prep
+    // plan, substitutions, the Host Hub's dish, timeline and run sheet — asks
+    // for it and keeps exactly the reasoning it had on Opus 5. No effort cap
+    // anywhere; where thinking is on, the budget is widened to hold it rather
+    // than truncating the JSON behind it.
+    //
+    // Haiku doesn't take the adaptive switch at all, so [think] is ignored
+    // there and the cheap default path is untouched.
+    final bool thinks = _thinks(model, think: think);
     final Map<String, dynamic> body = <String, dynamic>{
       'model': model,
       'max_tokens': thinks ? maxTokens * 4 : maxTokens,
+      if (thinks) 'thinking': <String, String>{'type': 'adaptive'},
       // Fixed rules ride in a cached system block; only the user turn varies.
       'system': <Map<String, dynamic>>[
         <String, dynamic>{
@@ -1275,11 +1292,29 @@ seconds for any wait/cook/rest in that step, 0 when there is none.''';
     }
   }
 
-  /// Models that reason before answering unless told otherwise. Opus 5 and
-  /// Sonnet 5 do; the 4.x models this app used before did not, which is why
-  /// the token budgets here were sized without it.
+  /// Models that reason before answering whether asked to or not — nothing
+  /// this app ships does today, since the Opus setting is back on 4.8. Kept so
+  /// that pointing a setting at a 5-series model can't quietly double the
+  /// token budget's job without widening it.
   static bool _thinksByDefault(String model) =>
       model.startsWith('claude-opus-5') || model.startsWith('claude-sonnet-5');
+
+  /// Models that accept `thinking: {type: adaptive}`. Haiku 4.5 does not — it
+  /// wants an explicit token budget, an older shape this app has no use for —
+  /// so a thinking request is simply dropped on the fast model.
+  static bool _canThink(String model) => !model.startsWith('claude-haiku');
+
+  /// Whether one call reasons before answering: because it asked to, or
+  /// because the model does it regardless.
+  static bool _thinks(String model, {required bool think}) =>
+      _canThink(model) && (think || _thinksByDefault(model));
+
+  /// Test hook for [_thinks]. Which calls spend a reasoning pass is the whole
+  /// point of the per-call flag — the options call must not, the recipe must —
+  /// and it is not visible from the outside without spending a call.
+  @visibleForTesting
+  static bool debugThinks(String model, {required bool think}) =>
+      _thinks(model, think: think);
 
   /// Test hook for [_extractJson]. Reading a model's reply is the one piece
   /// of this file that can be checked without spending a call, and it is the

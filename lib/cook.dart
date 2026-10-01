@@ -3140,7 +3140,7 @@ class _ChefSettingsCardState extends State<ChefSettingsCard> {
           segments: const <ButtonSegment<String>>[
             ButtonSegment<String>(value: 'haiku', label: Text('Haiku')),
             ButtonSegment<String>(value: 'sonnet', label: Text('Sonnet')),
-            ButtonSegment<String>(value: 'opus', label: Text('Opus 5')),
+            ButtonSegment<String>(value: 'opus', label: Text('Opus 4.8')),
           ],
           selected: <String>{_model},
           showSelectedIcon: false,
