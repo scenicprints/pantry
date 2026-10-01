@@ -339,7 +339,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   }
 
   // Shared: open the 3-options screen. [request] carries the craving through
-  // so "Five different ideas" regenerates in the same mode.
+  // so "Three different ideas" regenerates in the same mode.
   void _openOptions(List<MealOption> options, String? request) {
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => OptionsScreen(
@@ -401,7 +401,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
                   style: serif(size: 22, weight: FontWeight.w600)),
               const SizedBox(height: 6),
               Text('Describe it however you like — a craving, a cuisine, a '
-                  'dish, a vibe. I\'ll tailor five ideas to it.',
+                  'dish, a vibe. I\'ll tailor three ideas to it.',
                   style: TextStyle(color: kMuted, fontSize: 13, height: 1.4)),
               const SizedBox(height: 16),
               TextField(
@@ -466,7 +466,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
       children: <Widget>[
         Text('Tonight', style: serif(size: 34, weight: FontWeight.w600)),
         const SizedBox(height: 6),
-        Text('Tell me when you\'re ready and I\'ll give you five ideas from '
+        Text('Tell me when you\'re ready and I\'ll give you three ideas from '
             'what\'s in the kitchen.',
             style: TextStyle(color: kMuted, fontSize: 14, height: 1.5)),
         const SizedBox(height: 24),
@@ -889,7 +889,7 @@ Future<String?> confirmCooked(BuildContext context, String title) async {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-// OPTIONS — five wildly different dinners + "Five different ideas"
+// OPTIONS — three wildly different dinners + "Three different ideas"
 // ═══════════════════════════════════════════════════════════════════════
 
 class OptionsScreen extends StatefulWidget {
@@ -935,7 +935,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
 
   Future<void> _regenerate() async {
     final List<MealOption>? next = await withSpinner<List<MealOption>>(
-        context, 'Five different ideas…', () => widget.onRegenerate(_options));
+        context, 'Three different ideas…', () => widget.onRegenerate(_options));
     if (next != null && mounted) {
       setState(() => _options = next);
     }
@@ -1002,7 +1002,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
           ],
           Text(
               hasReq
-                  ? 'Five takes on what you asked for — pick one.'
+                  ? 'Three takes on what you asked for — pick one.'
                   : 'Pick one — each uses a different protein.',
               style: TextStyle(color: kMuted, fontSize: 13)),
           const SizedBox(height: 14),
@@ -1014,7 +1014,7 @@ class _OptionsScreenState extends State<OptionsScreen> {
             child: OutlinedButton.icon(
               onPressed: _regenerate,
               icon: const Icon(Icons.refresh_rounded, size: 18),
-              label: const Text('Five different ideas'),
+              label: const Text('Three different ideas'),
               style: OutlinedButton.styleFrom(
                   foregroundColor: kAccent,
                   side: BorderSide(color: kAccent.withValues(alpha: 0.5)),

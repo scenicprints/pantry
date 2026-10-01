@@ -222,7 +222,7 @@ class Chef {
   // ── Call 1: the options ───────────────────────────────────────────────
   // [request], when given, is a free-text craving/description (e.g. from the
   // wife) — the options are then tailored to it. [justShown] are the titles
-  // of options the user just rejected with "five different ideas", so a
+  // of options the user just rejected with "three different ideas", so a
   // regenerate can't hand back the same set. [recentForms] is derived from
   // recentMeals so the chef is steered away from what it keeps making.
   static Future<List<MealOption>> generateOptions({
@@ -237,7 +237,7 @@ class Chef {
     final String req = request?.trim() ?? '';
     final bool hasReq = req.isNotEmpty;
     final List<String> avoids = await ChefKeys.getAvoids();
-    // Ask, check, and if they came back as one dinner in five hats — or
+    // Ask, check, and if they came back as one dinner in three hats — or
     // with a food he doesn't eat — ask again with the specific complaint
     // attached. An avoid violation is a hard failure, so it gets a second
     // retry; variety alone gets one.
@@ -295,7 +295,7 @@ class Chef {
 
   /// Everything wrong with a set of options, worst first: a food on the avoid
   /// list is a hard failure; blowing the fatty liver limits and
-  /// one-dinner-in-five-hats are the softer ones.
+  /// one-dinner-in-three-hats are the softer ones.
   static String _optionsProblem(List<MealOption> opts, List<String> avoids,
       {required bool requireProteinVariety}) {
     final List<String> parts = <String>[
@@ -368,16 +368,15 @@ They also have to be $kOptionCount WILDLY different dinners:
     options may be the same KIND of dinner — and never more than one of them
     eaten with a spoon out of a bowl.
   • CUISINE / flavor family — $kOptionCount different ones, ranging widely
-    across the world rather than handing back five neighbours.
+    across the world rather than handing back three neighbours.
   • primary PROTEIN — repeats are FINE here. Two chicken dinners that are
     genuinely different dishes are welcome; just don't put every option on the
     same protein.
 
 Ordinary still outranks different. There are more than enough plain weeknight
-dinners to fill $kOptionCount slots — a roast, a soup, tacos, a pasta and a
-stir-fry are already five familiar dinners with nothing in common — so never
-reach for a fusion, a novelty ingredient or a restaurant dish to fill the last
-one. If a slot will only go "different" by going strange, keep it plain and take
+dinners to fill $kOptionCount slots — a roast, tacos and a pasta are already
+three familiar dinners with nothing in common — so never reach for a fusion,
+a novelty ingredient or a restaurant dish to fill the last one. If a slot will only go "different" by going strange, keep it plain and take
 the distance from a different axis. Use any [EXPIRING SOON] ingredient in
 whichever option it honestly belongs in.''';
 
@@ -470,9 +469,9 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
 (or "No new buys" if all from pantry). Cost fields are numbers in dollars
 (e.g. 8.50).''';
 
-    // Roomier than the old three-option budget: five options of JSON, each
-    // with sides and cost fields, ran close to the 1800 ceiling.
-    final Map<String, dynamic> data = await _post(user: user, maxTokens: 3200);
+    // Three options of JSON, each with sides and cost fields, ran close to
+    // the old 1800 ceiling, so keep a little headroom above it.
+    final Map<String, dynamic> data = await _post(user: user, maxTokens: 2200);
     final List<dynamic> opts = (data['options'] as List<dynamic>?) ?? <dynamic>[];
     final List<MealOption> out = opts
         .whereType<Map<String, dynamic>>()
@@ -1181,7 +1180,7 @@ seconds for any wait/cook/rest in that step, 0 when there is none.''';
 
     // Opus 5 THINKS BY DEFAULT; opus-4-8, which it replaced, did not. Thinking
     // tokens are spent out of max_tokens, so a budget that comfortably held
-    // five options before now has to cover the reasoning as well, and when it
+    // the options before now has to cover the reasoning as well, and when it
     // runs out the JSON is truncated mid-object and the reply is unreadable.
     //
     // THAT IS NOT A REASON TO CAP THE THINKING. Pinning the calls to low

@@ -8,7 +8,7 @@ import 'dart:convert';
 // ═══════════════════════════════════════════════════════════════════════
 
 /// How many dinner options the chef proposes each time.
-const int kOptionCount = 5;
+const int kOptionCount = 3;
 
 /// One of the [kOptionCount] options the user picks from.
 /// The dish forms the chef must choose from. Every option must use a
@@ -152,7 +152,7 @@ String formFamily(String form) {
 ///  • CUISINE is strict: no two share one.
 ///  • PROTEIN may repeat — the user's call ("it is okay to share a protein").
 ///    Two chicken dinners that are genuinely different dishes are fine; all
-///    of them on one protein is still one dinner in five hats.
+///    of them on one protein is still one dinner in three hats.
 String optionsSimilarity(List<MealOption> opts,
     {bool requireProteinVariety = true}) {
   if (opts.length < 2) {
