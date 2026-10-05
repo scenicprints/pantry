@@ -282,9 +282,11 @@ class CookPlanScreen extends StatelessWidget {
   /// Total against the card's claim. When the card never said a number this
   /// is just the total, with nothing to compare it to.
   Widget _timeCard() {
-    final int? diff = plan.minutesVsCard;
-    final bool faster = diff != null && diff > 0;
-    final bool slower = diff != null && diff < 0;
+    // No comparable card time reads as a gap of zero, which is neither
+    // faster nor slower, so the comparison line simply does not appear.
+    final int gap = plan.minutesVsCard ?? 0;
+    final bool faster = gap > 0;
+    final bool slower = gap < 0;
     final Color c = slower ? kWarn : kOlive;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -313,8 +315,8 @@ class CookPlanScreen extends StatelessWidget {
                     const SizedBox(height: 4),
                     Text(
                         faster
-                            ? '${diff!} min faster'
-                            : '${-diff!} min longer, worth it',
+                            ? '$gap min faster'
+                            : '${-gap} min longer, worth it',
                         textAlign: TextAlign.end,
                         style:
                             mono(size: 12, weight: FontWeight.w600, color: c)),

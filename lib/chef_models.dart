@@ -922,7 +922,7 @@ class CookPlan {
       );
 
   factory CookPlan.fromJson(Map<String, dynamic> j) => CookPlan(
-        title: (j['title'] as String?)?.trim() ?? 'Tonight's delivery',
+        title: (j['title'] as String?)?.trim() ?? "Tonight's delivery",
         verdict: (j['verdict'] as String?)?.trim() ?? '',
         totalMinutes: (j['totalMinutes'] as num?)?.round() ?? 0,
         cardMinutes: (j['cardMinutes'] as num?)?.round() ?? 0,
