@@ -19,7 +19,7 @@ deleted by hand whenever.
 
 Its slot on the Cook tab is taken by **Cook for HungryRoot** below.
 
-## Cook for HungryRoot — landed, unreleased
+## Cook for HungryRoot — released in v0.26.0
 
 A third button on the Cook tab, where Host Hub used to be. Paste the card
 that came in the delivery, get the best way to cook exactly that food in
@@ -72,13 +72,36 @@ honest about the clock.
 measuring screen that this cook never had. Every existing caller passes a
 non-null session, so nothing else moves.
 
-### Not verified by a compiler
+### What CI caught, since nothing compiles locally
 
-There is no Flutter SDK on the Windows machine, so `flutter analyze` and
-`flutter test` have not run against any of this. Delimiter balance and every
-app symbol were checked by script; `test/hungryroot_test.dart` covers the
-parse, the time comparison in both directions, the grams conversion and both
-screens building. CI is the first real gate.
+There is no Flutter SDK on the Windows machine, so the push was the first
+analyze and test run this code had ever seen. It took three runs to go green,
+and the faults are worth remembering:
+
+- **An apostrophe in a single-quoted Dart string.** `'Tonight's delivery'`
+  balances its braces perfectly and does not parse, so the local
+  delimiter-balance script walked straight past it. Possessives take double
+  quotes, the way `"Couldn't read the chef's reply"` already does in
+  `chef.dart`.
+- **`!` on a nullable the analyzer will not promote.** The time row asserted
+  non-null on a local it had only tested through a separate bool. A missing
+  card time now reads as a gap of zero, which is neither faster nor slower,
+  so the comparison line stays absent with no `!` anywhere.
+- **A widget test that pinned where a button lands.** Text wraps further in
+  the test font than in Fraunces, so the Cooking mode button sat outside the
+  built viewport and the assertion found nothing. The lower half of the page
+  is now walked in page order with `scrollUntilVisible`, which asserts that
+  it is reachable rather than where it sits.
+
+Green on run three: analyze clean, 228 tests. v0.26.0 is built, signed and
+published, so the in-app updater will offer it.
+
+### Rebased onto two releases that landed first
+
+v0.25.2 cut the option count to three and v0.25.3 moved the Opus setting back
+to 4.8, where thinking is a per-call opt-in. `planHungryRoot` passes
+`think: true`: it is the same class of call as the recipe, a judgement about
+food he then stands at a counter and follows, not the picker he waits on.
 
 ## Chef health direction — weight loss + fatty liver (landed, unreleased)
 
