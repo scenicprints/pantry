@@ -234,7 +234,29 @@ void main() {
       expect(find.text('14 min'), findsOneWidget);
       expect(find.text('the card said 8 min'), findsOneWidget);
       expect(find.text('6 min longer, worth it'), findsOneWidget);
-      expect(find.text('Cooking mode'), findsOneWidget);
+    });
+
+    testWidgets('the method and the cooking mode button are below the plan',
+        (WidgetTester t) async {
+      // Scrolled to rather than asserted in place: the verdict and the
+      // station jobs wrap further in the test font than in Fraunces, so
+      // where the button lands is not a fact this test can pin. That it is
+      // reachable is.
+      await _pumpPlan(t, gramsOnly(CookPlan.fromJson(_reply())));
+      // In page order, because scrolling only goes one way and reaching a
+      // later one takes an earlier one off screen. scrollUntilVisible throws
+      // when it runs out of list, so a missing section fails here.
+      for (final String text in <String>[
+        'Cooking mode',
+        'WHAT CAME IN THE BOX',
+        'Olive oil',
+        'METHOD',
+        'Burgers on the stove',
+        'NOTES',
+      ]) {
+        await t.scrollUntilVisible(find.text(text), 200);
+        expect(find.text(text), findsOneWidget, reason: text);
+      }
     });
 
     testWidgets('beating the card says so', (WidgetTester t) async {
