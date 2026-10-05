@@ -831,3 +831,116 @@ class Substitution {
         fromPantry: (j['fromPantry'] as bool?) ?? false,
       );
 }
+
+// ═════════════════════════════════════════════════════════════════════
+// HUNGRYROOT COOK PLAN — the box has arrived, the method is the question.
+//
+// Not a Recipe, because a Recipe answers "what should I make", carries a
+// cost, a servings scaler and a shopping list, and none of those mean
+// anything once the food is paid for and portioned. What this carries
+// instead is the part the card got wrong: which appliance does what, and
+// whether the plan actually beats the time printed on it.
+//
+// It still exposes a [recipe], because the counter screen, the step timers
+// and the two-pane cooking mode are all already built and they all speak
+// Recipe.
+// ═════════════════════════════════════════════════════════════════════
+
+/// One appliance and the job it has been given.
+class CookStation {
+  final String appliance;
+  final String job;
+  const CookStation({required this.appliance, required this.job});
+
+  factory CookStation.fromJson(Map<String, dynamic> j) => CookStation(
+        appliance: (j['appliance'] as String?)?.trim() ?? '',
+        job: (j['job'] as String?)?.trim() ?? '',
+      );
+
+  Map<String, dynamic> toJson() =>
+      <String, dynamic>{'appliance': appliance, 'job': job};
+}
+
+/// How to cook one delivered meal in this kitchen.
+class CookPlan {
+  final String title;
+
+  /// One sentence: the call that was made and why. The headline.
+  final String verdict;
+
+  /// Honest total, start to plate, preheat included.
+  final int totalMinutes;
+
+  /// What the card claimed, or 0 when it didn't say. Kept so the plan can be
+  /// held against the number he read in the box instead of replacing it
+  /// quietly.
+  final int cardMinutes;
+
+  final List<CookStation> stations;
+  final List<RecipeIngredient> ingredients;
+  final List<RecipeStep> steps;
+  final String notes;
+
+  const CookPlan({
+    required this.title,
+    required this.verdict,
+    required this.totalMinutes,
+    required this.cardMinutes,
+    required this.stations,
+    required this.ingredients,
+    required this.steps,
+    required this.notes,
+  });
+
+  /// Minutes saved against the card, negative when the plan takes longer.
+  /// Null when the card never stated a time, so the UI can say nothing
+  /// rather than compare against a zero.
+  int? get minutesVsCard =>
+      cardMinutes <= 0 || totalMinutes <= 0 ? null : cardMinutes - totalMinutes;
+
+  /// The same plan as a Recipe, for cooking mode and the step timers.
+  /// baseServings is 1 and the factor is always 1: the box decided the
+  /// portions, so there is nothing to scale.
+  Recipe get recipe => Recipe(
+        title: title,
+        description: verdict,
+        ingredients: ingredients,
+        steps: steps,
+        notes: notes,
+        baseServings: 1,
+      );
+
+  CookPlan copyWith({List<RecipeIngredient>? ingredients}) => CookPlan(
+        title: title,
+        verdict: verdict,
+        totalMinutes: totalMinutes,
+        cardMinutes: cardMinutes,
+        stations: stations,
+        ingredients: ingredients ?? this.ingredients,
+        steps: steps,
+        notes: notes,
+      );
+
+  factory CookPlan.fromJson(Map<String, dynamic> j) => CookPlan(
+        title: (j['title'] as String?)?.trim() ?? 'Tonight's delivery',
+        verdict: (j['verdict'] as String?)?.trim() ?? '',
+        totalMinutes: (j['totalMinutes'] as num?)?.round() ?? 0,
+        cardMinutes: (j['cardMinutes'] as num?)?.round() ?? 0,
+        stations: ((j['stations'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(CookStation.fromJson)
+            .where((CookStation s) => s.appliance.isNotEmpty)
+            .toList(),
+        ingredients: ((j['ingredients'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(RecipeIngredient.fromJson)
+            .where((RecipeIngredient i) => i.item.isNotEmpty)
+            .toList(),
+        steps: ((j['steps'] as List<dynamic>?) ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .map(RecipeStep.fromJson)
+            .where((RecipeStep s) => s.content.isNotEmpty || s.title.isNotEmpty)
+            .toList(),
+        notes: (j['notes'] as String?)?.trim() ?? '',
+      );
+}

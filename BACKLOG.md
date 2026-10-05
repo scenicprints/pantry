@@ -1,5 +1,85 @@
 # Pantry — Roadmap / Backlog
 
+## Host Hub — removed
+
+Gone, not deprecated. It was built, it was used a little, and it was a bust:
+planning a dinner party is not a thing that happens often enough to earn a
+whole screen, a sync file and its own chef. Deleted outright rather than left
+dark, because a dead door on the Cook tab is worse than no door.
+
+Removed: `lib/host.dart`, `lib/host_hub.dart`, `lib/host_brief.dart`, their
+three test files, the `generateHostDish` / `generateHostTimeline` /
+`generateRunSheet` calls and both host system prompts in `lib/chef.dart`, the
+`loadHostHub` / `saveHostHub` pair in `lib/storage.dart`, and the Cook tab's
+HOSTING section and Host Hub button.
+
+`host_hub.json` and `host_briefs.json` are left sitting in pantry-data and in
+the app's files dir. Nothing reads them now; they are harmless and can be
+deleted by hand whenever.
+
+Its slot on the Cook tab is taken by **Cook for HungryRoot** below.
+
+## Cook for HungryRoot — landed, unreleased
+
+A third button on the Cook tab, where Host Hub used to be. Paste the card
+that came in the delivery, get the best way to cook exactly that food in
+this kitchen. One screen in, one screen out.
+
+The card is the reason this exists. HungryRoot writes for a kitchen with one
+skillet, so it runs the burgers, then the zucchini, then the buns through the
+same pan and calls the whole thing eight minutes, which is not possible. He
+owns an air fryer, a Tovala, a grill and a stove. The feature is reassigning
+those jobs to the appliances that are here, running them at once, and being
+honest about the clock.
+
+### The shape of it, decided and not open
+
+- **Paste only.** No photo, no vision call. He copies the text.
+- **Method and fat.** It picks the appliance, the order, the temperature, the
+  timing and the technique, and it says how much cooking fat and which one.
+  It does NOT drop, add, swap or reduce a component, and it does not touch a
+  seasoning the card names. The food is bought; it is not being edited.
+- **One-shot.** Nothing saved, no history, no recipe box entry, no sync file.
+  Paste, cook, gone.
+- **No pantry, no cost, no servings scaler.** The box decided the portions,
+  so `CookPlan.recipe` is baseServings 1 and the factor is always 1.
+
+### Where it lives
+
+- `lib/hungryroot.dart` — `HungryRootScreen` (the paste box) and
+  `CookPlanScreen` (verdict, time row, stations, method). Cooking mode, the
+  step timers, the two-pane counter view and the screen wakelock are all
+  reused from `cook.dart` as-is.
+- `lib/chef_models.dart` — `CookPlan` and `CookStation`. `CookPlan` is not
+  a `Recipe` because a Recipe carries a cost, a shopping list and a scaler,
+  none of which mean anything here. It exposes `.recipe` so the counter
+  screens, which all speak Recipe, work unchanged.
+- `lib/chef.dart` — `Chef.planHungryRoot` plus `_hungryRootSystemPrompt`.
+  A separate system prompt, for the same reason Host Hub had one: the cached
+  prompt is written for a chef inventing a meal out of a pantry under liver
+  rules that outrank it, and here there is no pantry and the meal is not up
+  for a verdict. The health rules survive as TECHNIQUE only.
+- `lib/measures.dart` — `gramsOnly`, applied inside `planHungryRoot`. The
+  prompt asks for grams and the model still returns "1 tsp oil", so the
+  conversion is enforced in code like every other amount in this app. A
+  piece keeps its count and gains the weight ("1 medium (196 g)"); salt,
+  pepper and dried seasonings keep their spoons.
+
+### One change outside the feature
+
+`CookingModeScreen` only shows its **Weights** action when it has a
+`CookSession`. It used to show it always and answer a tap with advice about a
+measuring screen that this cook never had. Every existing caller passes a
+non-null session, so nothing else moves.
+
+### Not verified by a compiler
+
+There is no Flutter SDK on the Windows machine, so `flutter analyze` and
+`flutter test` have not run against any of this. Delimiter balance and every
+app symbol were checked by script; `test/hungryroot_test.dart` covers the
+parse, the time comparison in both directions, the grams conversion and both
+screens building. CI is the first real gate.
+
 ## Chef health direction — weight loss + fatty liver (landed, unreleased)
 
 The chef now cooks for a fatty liver as well as for weight loss. This is the

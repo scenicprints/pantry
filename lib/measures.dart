@@ -259,3 +259,40 @@ double? gramsFor(
 
 double _round(double g) =>
     g >= 100 ? g.roundToDouble() : (g * 10).roundToDouble() / 10;
+
+/// Every weighable amount in [plan] rewritten in grams.
+///
+/// The HungryRoot card speaks in teaspoons because the card is paper. He
+/// cooks on a scale, and the chef has been told to use grams in the prompt
+/// and still returns "1 tsp oil" — the same rule this whole file exists to
+/// stop asking for nicely. Anything with no honest weight (salt and pepper
+/// to taste, a dried spice, a bun) is left exactly as written.
+CookPlan gramsOnly(CookPlan plan) => plan.copyWith(
+      ingredients: plan.ingredients
+          .map((RecipeIngredient i) {
+            if (isGramAmount(i.amount)) {
+              return i;
+            }
+            final double? g = gramsFor(i.item, i.amount);
+            if (g == null || g <= 0) {
+              return i;
+            }
+            // The piece count is how he'd say it and the grams are what the
+            // scale reads, so keep both rather than trading one away.
+            final String unit = amountUnit(i.amount).trim();
+            final bool piece = unit.isEmpty ||
+                RegExp('^(clove|cloves|piece|pieces|medium|large|small|whole|'
+                        'head|heads|stalk|stalks|sprig|sprigs)')
+                    .hasMatch(_norm(unit));
+            return RecipeIngredient(
+              item: i.item,
+              amount: piece
+                  ? '${i.amount} (${_fmtG(g)} g)'
+                  : '${_fmtG(g)} g',
+            );
+          })
+          .toList(),
+    );
+
+String _fmtG(double g) =>
+    g == g.roundToDouble() ? g.toInt().toString() : g.toStringAsFixed(1);

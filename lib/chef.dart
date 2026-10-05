@@ -6,8 +6,8 @@ import 'package:http/http.dart' as http;
 
 import 'avoid.dart';
 import 'chef_models.dart';
-import 'host_hub.dart';
 import 'liver.dart';
+import 'measures.dart';
 import 'models.dart';
 import 'pricebook.dart';
 
@@ -815,342 +815,118 @@ Respond with ONLY valid JSON, no markdown, in exactly this shape:
     return Substitution.fromJson(data);
   }
 
-  // ── Host Hub: cooking for guests — the dish is exactly what the user
-  // typed, scaled to a guest count, with NO diet/health rules attached (see
-  // _hostSystemPrompt: a genuinely separate system prompt, not a user-turn
-  // request fighting the cached one that tells the model the liver rules
-  // "outrank taste, cost and the pantry"). The permanent avoid list still
-  // always applies; [guestNotes] is an additional, event-only set of
-  // restrictions checked the same way and never written back to it.
-  static Future<Recipe> generateHostDish({
-    required String dish,
-    required String course,
-    required int guests,
-    required List<PantryItem> pantry,
-    PriceBook prices = const PriceBook(),
-    String guestNotes = '',
-    String dishNotes = '',
-    String dinnerNotes = '',
-  }) async {
-    final List<String> avoids = await ChefKeys.getAvoids();
-    final List<String> guestEntries = _splitGuestNotes(guestNotes);
-    final List<String> allAvoids = <String>[...avoids, ...guestEntries];
-    Recipe out = await _askHostDish(
-        dish: dish,
-        course: course,
-        guests: guests,
-        pantry: pantry,
-        prices: prices,
-        guestNotes: guestNotes,
-        dishNotes: dishNotes,
-        dinnerNotes: dinnerNotes);
-    List<AvoidHit> hits = recipeAvoidHits(out, allAvoids);
-    if (hits.isNotEmpty) {
-      final Recipe retry = await _askHostDish(
-          dish: dish,
-          course: course,
-          guests: guests,
-          pantry: pantry,
-          prices: prices,
-          guestNotes: guestNotes,
-          dishNotes: dishNotes,
-          dinnerNotes: dinnerNotes,
-          complaint: avoidComplaint(hits));
-      final List<AvoidHit> retryHits = recipeAvoidHits(retry, allAvoids);
-      if (retryHits.length < hits.length) {
-        out = retry;
-        hits = retryHits;
-      }
-    }
-    if (hits.isNotEmpty) {
-      throw ChefException('The chef kept using '
-          '${hits.map((AvoidHit h) => h.term).join(', ')} in "$dish", which '
-          'is on your avoid list${guestEntries.isEmpty ? '' : ' or in the '
-              'guest notes'}. Try adjusting the dish or the notes.');
-    }
-    return out;
-  }
-
-  static Future<Recipe> _askHostDish({
-    required String dish,
-    required String course,
-    required int guests,
-    required List<PantryItem> pantry,
-    required PriceBook prices,
-    required String guestNotes,
-    String dishNotes = '',
-    String dinnerNotes = '',
-    String complaint = '',
-  }) async {
-    final String knownPrices = formatKnownPrices(prices, pantry);
+  // ── HungryRoot: the food is already bought ────────────────────────────
+  /// How to cook a HungryRoot meal properly in THIS kitchen.
+  ///
+  /// Nothing like the rest of the chef. There is no pantry to read, no
+  /// shopping to do, no cost to estimate and no meal to invent: the box has
+  /// landed, the portions are fixed, and the only question left is method.
+  /// The card that comes with it is written for a stranger with one skillet,
+  /// so it serializes three jobs through one pan and then claims eight
+  /// minutes. He owns an air fryer, a Tovala and a grill. That is the whole
+  /// feature: reassign the jobs to the appliances that are actually here, run
+  /// them at the same time, and land everything hot together.
+  ///
+  /// It gets its own system prompt for the same reason Host Hub did — the
+  /// cached one tells the model the liver rules outrank the pantry and that
+  /// it is inventing a meal. Here it is inventing nothing, and refusing the
+  /// delivered food would be useless: he has already paid for it and it is
+  /// thawing on the counter.
+  static Future<CookPlan> planHungryRoot({required String instructions}) async {
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
-Write the full recipe for "$dish" (the $course course of a dinner for
-guests), for $guests ${guests == 1 ? 'person' : 'people'}. Measurements in
-GRAMS for anything weighed, counts for count items like eggs, spoons for
-dried ground spices only, and "to taste" for salt and pepper. Oil, minced
-garlic, pastes and sauces go in grams. Include heat levels, timing, and
-pro tips.
+Below is the recipe card that came with a HungryRoot delivery. The food in it
+is already bought, already portioned, and already in the kitchen. Tell the
+cook the best way to cook exactly this, in this kitchen.
 
-This is a HOSTING occasion — a dinner for guests, not an everyday weeknight
-meal. Cook "$dish" properly, the real way it's made, at the quality a guest
-would expect. Do NOT lighten it, cut its fat or sugar, or simplify it for
-health reasons — there are no calorie, macro or health targets for this
-recipe. Keep every step and ingredient the dish genuinely calls for.
-${dishNotes.trim().isEmpty ? '' : '''
+THE CARD, VERBATIM:
+---
+${instructions.trim()}
+---
 
-WHAT THE HOST ASKED FOR, FOR THIS DISH — decided already, not a suggestion.
-Follow it even where you would have written the dish differently, and where
-it rules something out, do not reach for it in another form (told no cream
-sauce, do not hand back a béchamel):
-${dishNotes.trim()}'''}
-${dinnerNotes.trim().isEmpty ? '' : '''
-
-ABOUT THE DINNER AS A WHOLE (context — obey anything in it that touches this
-dish): ${dinnerNotes.trim()}'''}
-Every chop, mince, trim and drain the method relies on has to be somewhere
-the cook can see it, in a step or in the ingredient's amount — nothing in a
-step may depend on work never written down.
-
-PANTRY (the complete list of what the user has on hand; prices are per gram
-or per unit):
-${formatPantry(pantry)}
-${knownPrices.isEmpty ? '' : '''
-
-KNOWN PRICES (bought before — use these exact unit prices for these new buys):
-$knownPrices'''}
-
-EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
-with these; never instruct the user to use anything else:
+EQUIPMENT — the ONLY appliances in this kitchen. The card was written for
+somebody who might own none of them, so it defaults to a skillet. You know
+better. Never write a step that needs anything not on this list:
 $equipment
 
-AVOID — the user's own permanent list of foods to keep out. Each entry covers
-its whole group, not just the words written. Nothing else is off limits on
-taste grounds.
+WHAT YOU MAY CHANGE: the appliance, the order, the temperature, the timing,
+the technique, and the cooking fat — how much of it and which one.
+
+WHAT YOU MAY NOT CHANGE: the food. Every component on that card goes on the
+plate, in the portion that arrived. Do not drop one, do not add one, do not
+swap one for something else, and do not substitute a seasoning the card
+names. If the card says a ranch seasoning packet, it is going on. You are not
+editing this meal, you are cooking it well.
+
+RUN IT IN PARALLEL. A card like this is usually written as one pan used three
+times in a row, because that is all it can assume. Spread the jobs across the
+appliances that are here so they run at once and finish together, and say
+plainly which appliance has which job. Where a job genuinely cooks better
+somewhere else — zucchini in the air fryer instead of sauteed in oil, buns
+toasted dry instead of in the pan — move it and say why in one clause.
+
+HEALTHIEST WAY TO COOK IT, within those limits. He is eating for weight loss
+and for a fatty liver, so: as little added fat as the food honestly needs,
+olive oil rather than butter, dry heat (air fry, broil, grill, steam) rather
+than a pan swimming in oil, and never deep-fried. This changes the METHOD
+only. Do not cut a portion, lighten a component, or tell him to leave
+something off the plate for health reasons — he bought the meal, it is a
+reasonable one, and this is not the screen that judges it.
+
+TIME, HONESTLY. The card usually states a cook time and it is usually
+optimistic, because it ignores preheating and pretends three sequential pans
+take as long as one. Report what this actually takes, start to plate,
+including any preheat. Put the card's own claim in cardMinutes (0 if it
+doesn't say one). If your plan is faster, that is the win; if it is slower,
+say so and let it be worth it.
+
+AMOUNTS: grams for anything weighed, including the oil — he cooks on a
+scale and a teaspoon is a number he then has to guess at. Spoons only for
+salt, pepper and dried ground spices, and "to taste" where the card says
+salt and pepper. For a component that arrived as a piece, say the piece and
+its weight if you can ("2 burger patties (about 170 g each)"). Carry the
+card's own amounts through; do not invent a portion it never gave.
+
+DONENESS: give the cue or the internal temperature wherever getting it wrong
+matters. Ground beef is 71C/160F, and "no pink remains" is not a
+temperature.
+
+AVOID — the user's own permanent list. It applies ONLY to anything YOU would
+add, never to what the card delivered: if a component on the card is on this
+list, cook it anyway and say nothing. Each entry covers its whole group.
 $avoids
-${guestNotes.trim().isEmpty ? '' : '''
 
-GUEST DIETARY NOTES — additional restrictions for THIS dish only, on top of
-the avoid list above, just as hard a rule: ${guestNotes.trim()}'''}
-${complaint.isEmpty ? '' : '''
-
-YOUR LAST ATTEMPT BROKE A RULE: $complaint. Rewrite the recipe without it —
-swap in something that respects every rule above, or adjust the dish.'''}
-
-For every ingredient NOT in that pantry list, append " (new buy)" to its name
-in the ingredients list. Do not imply the user already has anything not
-listed.
-
-For each step, set "timerSeconds" to the number of seconds for any wait/cook/
-rest timer in that step (e.g. 6 minutes = 360). Use 0 when the step has no
-time-based action.
-
-COST: estimate estCostTotal (whole dish), estCostPerServing, and
-estGroceryCost (ONLY the new buys — what the user actually spends at the
-store for this dish), in US dollars. Use the unit prices above; estimate
-typical grocery prices for anything without one. Report cost honestly; never
-let it change the dish — this is for guests.
+For each step, set "timerSeconds" to the seconds of any wait/cook/rest timer
+in that step (6 minutes = 360). Use 0 when the step has no timed action.
+Steps run in the order written, and when two things cook at once say so in
+the step that starts the second one, so nothing is left on a cold counter
+while the cook waits.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"title":"","description":"","ingredients":[{"item":"","amount":""}],"steps":[{"title":"","content":"","timerSeconds":0}],"notes":"","estCostTotal":0,"estCostPerServing":0,"estGroceryCost":0}
-"description" is one plain sentence that makes it sound worth serving — what
-it looks and tastes like on the plate. "notes" is one string with protein per
-serving, calories per serving, any new buys, and storage / make-ahead / pro
-tips — no health commentary, this dish isn't being judged against a diet.''';
+{"title":"","verdict":"","totalMinutes":0,"cardMinutes":0,"stations":[{"appliance":"","job":""}],"ingredients":[{"item":"","amount":""}],"steps":[{"title":"","content":"","timerSeconds":0}],"notes":""}
+"title" names the meal as the card does.
+"verdict" is ONE sentence: the call you made and why, in the words you would
+say handing him the plan ("Zucchini goes in the air fryer and the buns on
+Tovala Toast, so the stove is free for the burgers and all three land hot").
+"stations" is one row per appliance you are using, job written short enough
+to read at a glance ("Air fryer" / "Zucchini, 200C, 8 min, shake halfway").
+"notes" is one string: doneness cues worth repeating, what you changed about
+the fat and what that saved, and anything that can be done ahead. No calorie
+or macro accounting, no diet commentary on the meal itself.''';
 
     final Map<String, dynamic> data = await _post(
-        user: user, maxTokens: 2500, system: _hostSystemPrompt, think: true);
-    return Recipe.fromJson(data, baseServings: guests);
+        user: user,
+        maxTokens: 2200,
+        system: _hungryRootSystemPrompt,
+        // Same class of call as the recipe: a judgement about food he
+        // then stands at a counter and follows. Not the picker.
+        think: true);
+    // Grams are enforced here, not asked for politely. The prompt says it
+    // and the model still hands back "1 tsp oil"; measures.dart is the only
+    // thing that makes the number on the card match the number on the scale.
+    return gramsOnly(CookPlan.fromJson(data));
   }
-
-  /// Every dish written out in full — title, course, and the numbered method.
-  ///
-  /// The timeline and the run sheet BOTH need the actual steps. Handing them
-  /// only the titles and the notes was the whole problem: "the sauce keeps
-  /// three days" is a sentence inside step 4, so a planner that never sees
-  /// step 4 is guessing, and the cook is left reading every recipe to find
-  /// out what he could have done on Thursday.
-  static String _menuInFull(List<HostDish> dishes) {
-    final StringBuffer sb = StringBuffer();
-    for (final HostDish d in dishes) {
-      final Recipe? r = d.recipe;
-      if (r == null) {
-        continue;
-      }
-      sb.writeln('### ${d.course}: ${r.title}');
-      if (r.notes.isNotEmpty) {
-        sb.writeln('Notes: ${r.notes}');
-      }
-      for (int i = 0; i < r.steps.length; i++) {
-        final RecipeStep s = r.steps[i];
-        sb.writeln('${i + 1}. ${s.title.isEmpty ? '' : '${s.title} — '}'
-            '${s.content}'
-            '${s.timerSeconds > 0 ? ' [${(s.timerSeconds / 60).round()} min]' : ''}');
-      }
-      sb.writeln();
-    }
-    return sb.toString().trimRight();
-  }
-
-  /// A dated, day-by-day prep plan working back from the dinner. Empty list
-  /// on any failure — the menu still stands without it.
-  static Future<List<PrepDay>> generateHostTimeline({
-    required List<HostDish> dishes,
-    required int guests,
-    required String eventDate,
-  }) async {
-    final List<HostDish> built =
-        dishes.where((HostDish d) => d.recipe != null).toList();
-    if (built.isEmpty) {
-      return const <PrepDay>[];
-    }
-    final DateTime today = DateTime.now();
-    final DateTime? event =
-        eventDate.isEmpty ? null : DateTime.tryParse(eventDate);
-    final String user = '''
-Today is ${_dateStr(today)} (${_iso(today)}). The dinner is ${event == null ? '(no date set — assume it is three days from today)' : 'on ${_dateStr(event)} (${_iso(event)})'}, for $guests ${guests == 1 ? 'guest' : 'guests'}.
-
-THE MENU, IN FULL — every dish with its method:
-$menuPlaceholder
-
-Work out the PREP TIMELINE: what the host should do on which day, counting
-back from the dinner.
-
-READ THE METHODS AND PULL THE MAKE-AHEAD WORK OUT OF THEM. This is the whole
-job. Anything a step says can be done in advance, or that plainly keeps —
-a braise, a stock, a sauce, a dough, a marinade, a cure, a compound butter,
-a dressing, something that wants to chill or rest overnight, vegetables that
-can be cut the day before — becomes a task on the day it should be done,
-with how it is stored until it is wanted. The host should never have to read
-a recipe to find out what he could have done on Thursday.
-
-Rules:
-- Only days that carry real work. Never pad the plan with empty days, and
-  never invent prep a dish does not need.
-- Do not schedule something ahead that will be worse for it. Anything that
-  has to be fresh — a salad dressed, fish cooked, something fried or seared —
-  stays on dinner day and says so.
-- Dinner day carries the rest: what comes out of the fridge when, what goes
-  in the oven when, reheating, and the order things are plated.
-- Each task is one short line a busy host can read at a glance, and names
-  the dish it belongs to.
-- Nothing in the methods may be silently dropped: every dish should appear
-  somewhere in the plan.
-
-Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"days":[{"date":"YYYY-MM-DD","label":"","tasks":[{"text":"","dish":""}]}]}
-"date" is the real calendar date for that day, between today and the dinner
-inclusive. "label" is short, e.g. "Two days before" or "Dinner day". "dish"
-is the exact dish title from the menu above, or "" for a job that belongs to
-the dinner rather than to one dish.'''
-        .replaceFirst(menuPlaceholder, _menuInFull(built));
-
-    try {
-      final Map<String, dynamic> data = await _post(
-          user: user,
-          maxTokens: 2000,
-          system: _hostTimelineSystemPrompt,
-          think: true);
-      final List<dynamic> days = (data['days'] as List<dynamic>?) ?? <dynamic>[];
-      return days
-          .whereType<Map<String, dynamic>>()
-          .map((Map<String, dynamic> j) => PrepDay.fromJson(j))
-          .where((PrepDay p) => p.tasks.isNotEmpty)
-          .toList();
-    } on ChefException {
-      return const <PrepDay>[];
-    }
-  }
-
-  /// The dinner-day RUN SHEET: every dish's method merged into one ordered
-  /// sequence, so several dishes can be cooked at once and land together.
-  ///
-  /// Without this a menu is a pile of separate recipes and the cook can only
-  /// follow one at a time — which is not how a dinner is cooked.
-  static Future<List<ServiceStep>> generateRunSheet({
-    required List<HostDish> dishes,
-    required int guests,
-  }) async {
-    final List<HostDish> built =
-        dishes.where((HostDish d) => d.recipe != null).toList();
-    if (built.length < 2) {
-      return const <ServiceStep>[]; // one dish is just its own recipe
-    }
-    final String equipment = formatEquipment(await ChefKeys.getEquipment());
-    final String user = '''
-Cooking for $guests ${guests == 1 ? 'guest' : 'guests'}. Here is the whole
-menu, each dish with its own method:
-
-$menuPlaceholder
-
-EQUIPMENT — the only appliances in this kitchen. Two things cannot be in the
-oven at different temperatures at the same time, and one pan is one pan:
-$equipment
-
-Merge these into ONE RUN SHEET for dinner day: a single ordered list of
-steps that cooks the whole menu so that everything is ready together.
-
-This is a scheduling job, not a rewrite:
-- Keep each step's own wording and its timing. You are ordering the work,
-  not inventing new cooking.
-- Start with what takes longest and can sit, end with what must be fresh.
-- Interleave: while something braises or bakes, the cook is doing the next
-  dish's prep. Say what goes on during a long wait.
-- Respect the equipment. If two dishes want the oven at different
-  temperatures, sequence them, and say which one is resting or holding.
-- Say when something comes out to rest, and put the last-minute jobs — the
-  sear, the dressing, the reheat, the plating — at the end in the order they
-  happen.
-- "offset" is how many minutes BEFORE serving that step starts, counting
-  down (e.g. 150 for two and a half hours ahead, 0 for plating). Make them
-  consistent with the step times.
-- Every dish must appear. Nothing in any method may be dropped.
-
-Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"steps":[{"dish":"","title":"","content":"","timerSeconds":0,"offset":0}]}
-"dish" is the exact dish title from the menu above. "timerSeconds" is the
-seconds for any wait/cook/rest in that step, 0 when there is none.''';
-
-    try {
-      final Map<String, dynamic> data = await _post(
-          user: user,
-          maxTokens: 3000,
-          system: _hostTimelineSystemPrompt,
-          think: true);
-      final List<dynamic> steps = (data['steps'] as List<dynamic>?) ?? <dynamic>[];
-      return steps
-          .whereType<Map<String, dynamic>>()
-          .map((Map<String, dynamic> j) => ServiceStep.fromJson(j))
-          .where((ServiceStep s) => s.content.isNotEmpty)
-          .toList();
-    } on ChefException {
-      return const <ServiceStep>[];
-    }
-  }
-
-  /// Placeholder swapped for the menu, so the prompt can be a plain string
-  /// literal without the method text fighting its interpolation.
-  static const String menuPlaceholder = '<<<MENU>>>';
-
-  static String _iso(DateTime d) =>
-      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-
-  static List<String> _splitGuestNotes(String notes) => notes
-      .split(RegExp(r'[,;]|\band\b'))
-      .map((String s) => s.trim())
-      .where((String s) => s.isNotEmpty)
-      .toList();
-
-  static const List<String> _kWeekdays = <String>[
-    'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun',
-  ];
-  static const List<String> _kMonths = <String>[
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-  ];
-  static String _dateStr(DateTime d) =>
-      '${_kWeekdays[d.weekday - 1]}, ${_kMonths[d.month - 1]} ${d.day}';
 
   // ── shared request ────────────────────────────────────────────────────
   /// One call, with a single retry when the reply comes back unreadable.
@@ -1203,8 +979,8 @@ seconds for any wait/cook/rest in that step, 0 when there is none.''';
     //
     // opus-4-8 takes thinking as an opt-in, so the two needs stop fighting:
     // the options call asks for none, and every other call — recipes, the prep
-    // plan, substitutions, the Host Hub's dish, timeline and run sheet — asks
-    // for it and keeps exactly the reasoning it had on Opus 5. No effort cap
+    // plan, substitutions and the HungryRoot plan — asks for it and keeps
+    // exactly the reasoning it had on Opus 5. No effort cap
     // anywhere; where thinking is on, the budget is widened to hold it rather
     // than truncating the JSON behind it.
     //
@@ -1918,76 +1694,66 @@ deep fried. Build complementary sides. Support multi-person events and
 breakfast-for-dinner on request, same health rules, unless he says to indulge.
 ''';
 
-// ═══════════════════════════════════════════════════════════════════════
-// HOST HUB SYSTEM PROMPT — cooking for guests. Deliberately does NOT
-// inherit _systemPrompt: the fatty liver rules there are stated as hard
-// rules that "outrank taste, cost and the pantry," so a user-turn request to
-// skip them would be fighting the system prompt. This is the whole point of
-// Host Hub — no calorie/macro/health targets, no lightening a dish, cook it
-// the real way. The allergy, avoid list, pantry truth, equipment, cost and
-// recipe-completeness rules all still hold, kept in step with _systemPrompt
-// so the two chefs read like one chef minus the diet.
-// ═══════════════════════════════════════════════════════════════════════
-const String _hostSystemPrompt = '''
-You are the user's personal chef, now helping them cook for a DINNER PARTY —
-guests are coming over. This is a hosting occasion, not an everyday weeknight
-meal: there are NO calorie, macro, weight-loss or fatty-liver targets on
-these recipes. Cook each dish the real way it's meant to be made, at the
-quality a guest would expect. Never lighten, simplify, or cut fat, sugar or
-carbs for health reasons on a hosting recipe.
+// ═════════════════════════════════════════════════════════════════════
+// HUNGRYROOT SYSTEM PROMPT — he already owns the food.
+//
+// Separate from _systemPrompt on purpose, the same way the host one was. The
+// cached prompt is written for a chef INVENTING a meal out of a pantry under
+// liver rules that "outrank taste, cost and the pantry," and both halves of
+// that are wrong here. There is no pantry, and the meal is not up for a
+// verdict: the box has arrived, it was a sensible thing to order, and the
+// only decision left is how to cook it. A chef that opens by lightening a
+// delivered burger is answering a question nobody asked.
+//
+// So the health rules survive as TECHNIQUE only — less fat, the right fat,
+// dry heat over a swimming pan — and the food itself is untouchable.
+// ═════════════════════════════════════════════════════════════════════
+const String _hungryRootSystemPrompt = '''
+You are the user's personal chef. Tonight you are not inventing anything. A
+HungryRoot delivery has arrived with the food portioned and a recipe card in
+the box, and your whole job is to tell the cook the best way to put exactly
+that food on the plate using the appliances he actually owns.
+
+Think of the card as a competent stranger's first draft. It was written for a
+kitchen with one skillet and no air fryer, so it funnels every component
+through the same pan in sequence and quotes a cook time that assumes no
+preheat and no waiting. You know this kitchen. Rewrite the method for it.
 
 HARD RULES (never violate):
-- ALLERGY: shrimp. Never use it.
-- AVOID LIST: the user message carries the user's own permanent avoid list —
-  exactly as strict as any other day. Treat it as exhaustive; never add
-  restrictions beyond it, and never quietly omit an ingredient that isn't on
-  it because you assume the user dislikes it.
-- AVOID LIST ENTRIES ARE CATEGORIES, NOT WORDS: an entry rules out every food
-  in that group, not just dishes that spell the entry out.
-- GUEST DIETARY NOTES, when given, are ADDITIONAL hard rules for this one
-  dish only — just as strict as the avoid list, stacked on top of it.
-- EQUIPMENT: the user message lists the appliances actually in this kitchen.
-  Never write a step that needs anything not on that list.
-- Measurements: grams for anything weighed, counts for count items like
-  eggs, spoons for dried spices only, grams for oil and anything that pours,
-  "to taste" for salt and pepper — same convention
-  as any other day, nobody weighs a teaspoon of paprika.
+- THE FOOD IS FIXED. Every component on the card goes on the plate in the
+  portion delivered. Never drop, add, swap, or substitute one, and never
+  reduce a portion. You are not editing the meal.
+- ALLERGY: shrimp. The only case where you say a delivered component should
+  not be eaten.
+- THE AVOID LIST applies only to what YOU would add. A component the box
+  delivered is cooked and served, whatever is on that list, with no comment.
+- EQUIPMENT: the user message lists the appliances in this kitchen. Never
+  write a step that needs anything else. In particular, never fall back to
+  the card's skillet when something here does the job better.
+- NO HEALTH COMMENTARY ON THE MEAL. No calorie counts, no macro breakdown, no
+  "this is a bit heavy", no suggestion to skip the bun. He bought it. The
+  health work you do here is in the method and the fat, and nowhere else.
+- GRAMS for anything weighed, the cooking oil included. Spoons only for salt,
+  pepper and dried ground spices. He cooks on a scale.
 
-THE PANTRY LIST IS THE COMPLETE, LITERAL TRUTH:
-- Treat ONLY the exact items in the pantry list as in-stock. Everything else
-  — including basics like salt, oil, garlic, spices — is a NEW BUY.
-- Append " (new buy)" to any ingredient name that is not in the pantry list.
-
-COST AWARENESS (report honestly; never let it change the dish):
-- Unit prices are given for pantry/known items — use them exactly.
-- Estimate a realistic US grocery price for anything else.
-- This is a dinner for guests: cost is reported so the user can budget for
-  it, never a reason to cut a corner on the dish or swap something cheaper
-  in.
-
-MIRACLE NOODLE RULE: if the dish uses Miracle Noodles, always cook them IN
-the sauce, never prepped separately.
-
-RECIPE OUTPUT FORMAT:
-- title -> description -> ingredients (with amounts) -> numbered steps (each
-  with a short title) -> notes.
-- notes: protein per serving, calories per serving, any new buys, and any
-  storage / make-ahead / pro tips. No health or diet commentary — this dish
-  isn't being judged against one.
-- Steps must be clear and sequential with timing and heat levels. Don't
-  combine conflicting equipment in one step. Include pro tips where they
-  matter (slice against the grain, rest the meat, don't crowd the pan).
+HOW TO COOK IT BETTER:
+- PARALLELIZE. Put each component on the appliance that suits it and run them
+  together so everything is hot at once. Name the appliance in the step.
+- LEAST FAT THAT STILL COOKS IT WELL, and olive oil rather than butter.
+  Prefer air fry, broil, grill, steam and a dry toast over a pan with oil in
+  it. Never deep-fry. A patty with its own fat does not need oil under it.
+- RESPECT THE CARD'S FLAVOR INTENT. Seasoning the card names goes on, in the
+  amount it says. Dry heat is a method change, not a licence to under-season.
+- TEMPERATURES AND DONENESS CUES. Give the internal temperature wherever
+  getting it wrong matters, not just a colour. Ground beef is 71C/160F.
+- SAY WHAT RESTS. Meat that needs a minute off the heat gets a step saying so.
 - NO STEP MAY ASSUME WORK AN EARLIER STEP NEVER ASKED FOR. If the method
-  relies on a chop, a mince, a trim or a drain, it has to be somewhere the
-  cook can see it — an earlier step, or written into that ingredient's
-  amount. Read the method back as somebody standing at a cold counter with
-  the shopping done and nothing else.
-- SAY WHEN SOMETHING GOES IN RAW — a seasoned or shaped protein (meatballs,
-  a patty, a stuffing, a marinade) should say so in its own words, not read
-  like it was already cooked in a step you forgot to write.
-
-HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
-rolling boil).
+  relies on a wash, a slice, a trim or a pat-dry, it has to be written down
+  where the cook can see it. Read it back as somebody at a cold counter with
+  a box of food and nothing else.
+- BE HONEST ABOUT TIME, including preheat. Beating the card's number is a
+  real win and worth saying. Taking longer is allowed when the food is
+  better, and also worth saying.
 
 AIR FRYER REFERENCE (use this knowledge):
 - Diced potatoes small (~1cm): 12-15 min @ 200C/400F
@@ -1996,23 +1762,24 @@ AIR FRYER REFERENCE (use this knowledge):
 - Potato wedges/fries: 18-20 min @ 200C/400F
 - Whole chicken breast: 20-22 min @ 190C/380F, flip halfway
 - Breaded chicken tenders: 10-12 min @ 200C/400F, flip halfway
-- Always: single layer, don't overcrowd, shake/flip halfway.
+- Sliced courgette/zucchini rounds: 8-10 min @ 200C/400F, shake halfway
+- Always: single layer, don't overcrowd, shake/flip halfway. Most air fryers
+  want 3 minutes of preheat and it is worth the wait for a sear.
 
 TOVALA SMART OVEN REFERENCE (use ONLY if it's listed in EQUIPMENT):
 - Modes: Steam, Bake, Broil, Air Fry, Toast, Reheat. Its real advantage is
   chaining up to 3 modes into one automated cycle, each with its own time and
-  temperature. Capacity is countertop-sized: single layer, batch if needed.
+  temperature, so it can run unattended while the stove has your hands.
+- Steam keeps lean protein and vegetables from drying out; finish on Broil to
+  brown. Toast handles buns and bread dry, with no fat at all.
+- Countertop capacity: single layer, batch if needed.
 
-BEHAVIOR: Behave like a personal chef preparing a real dinner party — real
-technique, real quality, nothing dumbed down or apologized for. Own
-mistakes. Don't ask unnecessary questions. The pantry is the source of
-truth — never assume the user ran out of something they didn't mention.
-''';
+HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
+rolling boil). High for a sear is 8-9 and the pan wants to be hot before the
+food goes in.
 
-/// Lightweight — no recipe-writing rules needed, just a scheduling task.
-const String _hostTimelineSystemPrompt = '''
-You help a home cook plan the days before a dinner party. Be concrete and
-brief — short task lines a busy host can glance at, not full recipes. Never
-invent a dish that wasn't given to you. Respond with ONLY valid JSON, exactly
-as instructed, no markdown.
+BEHAVIOR: brief and certain, the way a chef hands over a plan. Make the call
+rather than listing options. Don't flatter the card and don't sneer at it.
+Don't ask questions. Respond with ONLY valid JSON, exactly as instructed, no
+markdown.
 ''';
