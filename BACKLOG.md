@@ -19,7 +19,7 @@ deleted by hand whenever.
 
 Its slot on the Cook tab is taken by **Cook for HungryRoot** below.
 
-## Cook for HungryRoot — released in v0.26.0
+## Cook for HungryRoot — released in v0.26.0, corrected in v0.26.1
 
 A third button on the Cook tab, where Host Hub used to be. Paste the card
 that came in the delivery, get the best way to cook exactly that food in
@@ -31,6 +31,42 @@ same pan and calls the whole thing eight minutes, which is not possible. He
 owns an air fryer, a Tovala, a grill and a stove. The feature is reassigning
 those jobs to the appliances that are here, running them at once, and being
 honest about the clock.
+
+### The v0.26.0 mistake, and the rule that replaced it
+
+v0.26.0 was a bad update and the fault was in the prompt, not the model. It
+was told to "spread the jobs across the appliances that are here so they run
+at once and finish together," and the example of a good verdict handed to it
+was a THREE-appliance plan. It did as it was told: a griddle, an air fryer
+and a Tovala for burgers, zucchini and buns. "Way more work than the original
+instructions."
+
+The error was treating the card's clock as the thing to beat. It isn't. One
+pan used three times in a row is ONE PAN TO WASH, and the card is right to do
+it. What costs him something is a second preheat, a second thing to watch and
+a second thing to scrub, on a weeknight, for two servings.
+
+So the standing rule is now **fewest things**, in both prompts and on screen:
+
+- One appliance is the target, two is a ceiling that has to be justified,
+  three is a wrong answer for a meal this size however well each part cooks.
+- The only reason that reliably pays for a second appliance is that it runs
+  UNATTENDED while his hands are busy elsewhere. Saving minutes does not pay.
+- Dry heat no longer justifies a second appliance by itself. A teaspoon of
+  olive oil in a pan that is already hot beats preheating the air fryer to
+  save a few grams of fat, and a patty's own rendered fat is what the
+  vegetables should cook in.
+- Time is still reported honestly, but it is explicitly not the score, and
+  the prompt now says not to chase the card's number.
+- The verdict example in the prompt is a one-pan plan, because the old
+  example was doing more damage than the rule it illustrated.
+- On screen, the station heading was **ALL AT ONCE**, which made running
+  three appliances look like the achievement. It is now **WHAT COOKS WHERE**
+  with the appliance count under it, reading "One appliance, start to
+  finish." when that is the answer.
+
+If a future session is tempted to make this cleverer, that is the direction
+the first version failed in.
 
 ### The shape of it, decided and not open
 

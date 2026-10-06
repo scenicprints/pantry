@@ -9,12 +9,15 @@ import 'theme.dart';
 // ═══════════════════════════════════════════════════════════════════════
 // COOK FOR HUNGRYROOT — the food is already here.
 //
-// The box has landed, the portions are decided, and the card in it was
-// written for a kitchen with one skillet and nothing else. So it runs the
-// burgers, then the zucchini, then the buns through that one pan and calls
-// the whole thing eight minutes. This kitchen has an air fryer, a Tovala, a
-// grill and a stove. The method is the only thing left to get right, and
-// that is the entire screen.
+// The box has landed and the portions are decided, so the method is the only
+// thing left to get right, and that is the entire screen.
+//
+// The point is LESS WORK than the card, not a cleverer plan than the card.
+// The first cut of this got that backwards: it was told to spread the jobs
+// across the appliances so they finished together, and it duly sent him to a
+// griddle, an air fryer and a Tovala for burgers, zucchini and buns. The
+// card's one pan used three times is one pan to wash. Anything on this
+// screen that makes using more things look like the win is a bug.
 //
 // What this deliberately does NOT have: a pantry, a shopping list, a cost
 // estimate, a servings stepper, a save button, a sync file. He paid for the
@@ -204,7 +207,12 @@ class CookPlanScreen extends StatelessWidget {
           ],
           if (plan.stations.isNotEmpty) ...<Widget>[
             const SizedBox(height: 20),
-            _heading('ALL AT ONCE'),
+            // Was "ALL AT ONCE", which made running three appliances look
+            // like the achievement. It is the cost, so the heading is now
+            // just a label and the count below it is the number that matters.
+            _heading('WHAT COOKS WHERE'),
+            const SizedBox(height: 6),
+            Text(_applianceCount(), style: mono(size: 11, color: kMuted)),
             const SizedBox(height: 10),
             for (final CookStation s in plan.stations) _stationRow(s),
           ],
@@ -352,6 +360,16 @@ class CookPlanScreen extends StatelessWidget {
               ]),
         ),
       );
+
+  /// The number of appliances, said out loud, because that is the thing that
+  /// decides whether this plan is less work than the card or more.
+  String _applianceCount() {
+    final int n = plan.stations.length;
+    if (n == 1) {
+      return 'One appliance, start to finish.';
+    }
+    return '$n appliances.';
+  }
 
   Widget _heading(String s) => Row(children: <Widget>[
         Text(s, style: labelCaps(color: kAccent)),

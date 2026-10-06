@@ -228,7 +228,8 @@ void main() {
         (WidgetTester t) async {
       await _pumpPlan(t, gramsOnly(CookPlan.fromJson(_reply())));
       expect(find.textContaining('air fryer'), findsWidgets);
-      expect(find.text('ALL AT ONCE'), findsOneWidget);
+      expect(find.text('WHAT COOKS WHERE'), findsOneWidget);
+      expect(find.text('3 appliances.'), findsOneWidget);
       expect(find.text('Air fryer'), findsOneWidget);
       expect(find.text('Tovala Smart Oven'), findsOneWidget);
       expect(find.text('14 min'), findsOneWidget);
@@ -257,6 +258,27 @@ void main() {
         await t.scrollUntilVisible(find.text(text), 200);
         expect(find.text(text), findsOneWidget, reason: text);
       }
+    });
+
+    testWidgets('one appliance reads as the good answer, not a thin one',
+        (WidgetTester t) async {
+      // The whole correction: "It wanted me to use a griddle, an air fryer
+      // and a tovala oven three separate things. Way more work than the
+      // original instructions." A single-pan plan is the win, so the screen
+      // has to say so rather than render a lonely table row.
+      await _pumpPlan(
+          t,
+          CookPlan.fromJson(_reply(
+            stations: <Map<String, dynamic>>[
+              <String, dynamic>{
+                'appliance': 'Stove',
+                'job': 'Burgers, then the zucchini in their fat, then buns',
+              },
+            ],
+          )));
+      expect(find.text('One appliance, start to finish.'), findsOneWidget);
+      expect(find.text('Stove'), findsOneWidget);
+      expect(find.textContaining('appliances.'), findsNothing);
     });
 
     testWidgets('beating the card says so', (WidgetTester t) async {
