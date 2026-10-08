@@ -6,10 +6,12 @@ import 'package:http/http.dart' as http;
 
 import 'avoid.dart';
 import 'chef_models.dart';
+import 'hungryroot_catalog.dart';
 import 'liver.dart';
 import 'measures.dart';
 import 'models.dart';
 import 'pricebook.dart';
+import 'storage.dart';
 
 // ═══════════════════════════════════════════════════════════════════════
 // AI CHEF — talks to the Claude API directly from the phone.
@@ -162,6 +164,19 @@ class ChefKeys {
 
   static Future<bool> hasUsableKey() async => (await effectiveKey()).isNotEmpty;
 
+  // HUNGRYROOT MODE. A chef setting, not a device one, so it rides in
+  // chef.json with the model and the avoid list rather than sitting in
+  // secure storage: turning it on at the counter on the phone and then
+  // picking dinner on the iPad has to mean the same thing. It lives in the
+  // prefs file because it is a plain bool and the secure store is for the
+  // key.
+  static const String kHungryRootPref = 'chef_hungryroot';
+
+  static bool get hungryRootMode => LocalCache.prefBool(kHungryRootPref);
+
+  static void setHungryRootMode(bool on) =>
+      LocalCache.setPrefBool(kHungryRootPref, on);
+
   static Future<String> getModelPref() async =>
       (await _s.read(key: _kModel)) ?? 'haiku';
   static Future<void> setModelPref(String p) => _s.write(key: _kModel, value: p);
@@ -233,10 +248,29 @@ class Chef {
     String? request,
     List<String> justShown = const <String>[],
     List<String> recentForms = const <String>[],
+    bool hungryRoot = false,
+    List<HungryRootPairing> pairings = const <HungryRootPairing>[],
   }) async {
     final String req = request?.trim() ?? '';
     final bool hasReq = req.isNotEmpty;
     final List<String> avoids = await ChefKeys.getAvoids();
+    // HUNGRYROOT MODE CHANGES THREE OF THE CHECKS BELOW.
+    //
+    // The liver numbers stop being a gate. The food is bought and portioned
+    // and he is cooking it either way, so the rules survive as TECHNIQUE
+    // (how it's cooked, which fat, how much) exactly as they do on the
+    // paste-a-card screen, and a pairing is never rejected for arriving at
+    // 9g of saturated fat.
+    //
+    // The avoid list stops applying to his own delivery. Each entry is
+    // still a hard rule for anything the CHEF reaches for, but a component
+    // that came in the box is a thing he chose and paid for, and refusing
+    // to cook it helps nobody.
+    //
+    // And variety loosens: three real HungryRoot recipes built from one
+    // box will share a cuisine and often a protein. Only serving the same
+    // KIND of dinner twice is still wrong.
+    final String boxFood = hungryRoot ? _boxText(pantry) : '';
     // Ask, check, and if they came back as one dinner in three hats — or
     // with a food he doesn't eat — ask again with the specific complaint
     // attached. An avoid violation is a hard failure, so it gets a second
@@ -248,9 +282,16 @@ class Chef {
         prices: prices,
         request: req,
         justShown: justShown,
-        recentForms: recentForms);
-    String problem = _optionsProblem(out, avoids, requireProteinVariety: !hasReq);
-    int attemptsLeft = optionsAvoidHits(out, avoids).isEmpty ? 1 : 2;
+        recentForms: recentForms,
+        hungryRoot: hungryRoot,
+        pairings: pairings);
+    String problem = _optionsProblem(out, avoids,
+        requireProteinVariety: !hasReq && !hungryRoot,
+        requireCuisineVariety: !hungryRoot,
+        skipLiver: hungryRoot,
+        forgive: boxFood);
+    int attemptsLeft =
+        _hits(out, avoids, boxFood).isEmpty ? 1 : 2;
     while (problem.isNotEmpty && attemptsLeft > 0) {
       attemptsLeft--;
       try {
@@ -262,13 +303,22 @@ class Chef {
             request: req,
             justShown: justShown,
             recentForms: recentForms,
+            hungryRoot: hungryRoot,
+            pairings: pairings,
             complaint: problem);
-        if (_isBetter(retry, out, avoids, requireProteinVariety: !hasReq)) {
+        if (_isBetter(retry, out, avoids,
+            requireProteinVariety: !hasReq && !hungryRoot,
+            requireCuisineVariety: !hungryRoot,
+            skipLiver: hungryRoot,
+            forgive: boxFood)) {
           out = retry;
         }
-        final String next =
-            _optionsProblem(out, avoids, requireProteinVariety: !hasReq);
-        if (optionsAvoidHits(out, avoids).isEmpty) {
+        final String next = _optionsProblem(out, avoids,
+            requireProteinVariety: !hasReq && !hungryRoot,
+            requireCuisineVariety: !hungryRoot,
+            skipLiver: hungryRoot,
+            forgive: boxFood);
+        if (_hits(out, avoids, boxFood).isEmpty) {
           problem = ''; // the hard rule is satisfied; stop spending calls
         } else {
           problem = next;
@@ -280,11 +330,12 @@ class Chef {
     // Last line of defence: never hand back a meal built on a food he
     // avoids, however many times the model insists on it.
     final List<MealOption> clean = out
-        .where((MealOption o) => optionAvoidHits(o, avoids).isEmpty)
+        .where((MealOption o) =>
+            forgivenHits(optionAvoidHits(o, avoids), boxFood).isEmpty)
         .toList();
     if (clean.isEmpty) {
       final String named =
-          optionsAvoidHits(out, avoids).map((AvoidHit h) => h.term).join(', ');
+          _hits(out, avoids, boxFood).map((AvoidHit h) => h.term).join(', ');
       throw ChefException(named.isEmpty
           ? 'The chef returned no usable options — try again.'
           : 'Every idea the chef came back with used $named, which is on your '
@@ -293,15 +344,78 @@ class Chef {
     return clean;
   }
 
+  /// The names of everything in the box, as one line to search.
+  static String _boxText(List<PantryItem> pantry) =>
+      HungryRootCatalog.hungryRootStock(pantry)
+          .map((PantryItem i) => i.name.toLowerCase())
+          .join(' | ');
+
+  /// Avoid hits that still count, with the ones he bought himself dropped.
+  ///
+  /// [boxText] is the names of his own HungryRoot stock, and is empty unless
+  /// the mode is on — so outside HungryRoot mode this is the plain avoid
+  /// check it has always been.
+  ///
+  /// A hit is only forgiven when the term the avoid list caught is ITSELF in
+  /// the box, matched as a whole phrase. The looser rule, forgiving a term
+  /// because one of its words turns up somewhere in the delivery, hands back
+  /// the wrong answer on exactly the terms that matter: "blue cheese" would
+  /// be waved through on a box containing cheese tortellini. Where this is
+  /// wrong it is wrong in the safe direction, and the avoid list still binds.
+  @visibleForTesting
+  static List<AvoidHit> forgivenHits(List<AvoidHit> hits, String boxText) {
+    if (boxText.isEmpty) {
+      return hits;
+    }
+    return hits.where((AvoidHit h) => !_inBox(boxText, h.term)).toList();
+  }
+
+  /// Is [term] one of the foods in the box? The whole phrase, on word
+  /// boundaries, with a trailing "s" on either side not making it a
+  /// different food.
+  ///
+  /// The pattern is built out of the term's own words rather than escaped
+  /// wholesale, so there is nothing to get wrong about punctuation: the
+  /// words are stripped to letters and digits first, and anything between
+  /// them in the pantry name ("chicken, cooked") still matches.
+  static bool _inBox(String boxText, String term) {
+    final List<String> words = term
+        .toLowerCase()
+        .split(RegExp(r'[^a-z0-9]+'))
+        .where((String w) => w.isNotEmpty)
+        .toList();
+    if (words.isEmpty) {
+      return false;
+    }
+    // A plural on either side is the same food, so the last word loses its
+    // "s" and the pattern puts an optional one back: "mushrooms" on the
+    // avoid list finds "Sliced Mushroom" on the shelf, and the reverse.
+    final String last = words.last;
+    if (last.length > 3 && last.endsWith('s')) {
+      words[words.length - 1] = last.substring(0, last.length - 1);
+    }
+    return RegExp('(?<![a-z])${words.join(r'[^a-z0-9]+')}s?(?![a-z])')
+        .hasMatch(boxText);
+  }
+
+  static List<AvoidHit> _hits(
+          List<MealOption> opts, List<String> avoids, String boxText) =>
+      forgivenHits(optionsAvoidHits(opts, avoids), boxText);
+
   /// Everything wrong with a set of options, worst first: a food on the avoid
   /// list is a hard failure; blowing the fatty liver limits and
   /// one-dinner-in-three-hats are the softer ones.
   static String _optionsProblem(List<MealOption> opts, List<String> avoids,
-      {required bool requireProteinVariety}) {
+      {required bool requireProteinVariety,
+      bool requireCuisineVariety = true,
+      bool skipLiver = false,
+      String forgive = ''}) {
     final List<String> parts = <String>[
-      avoidComplaint(optionsAvoidHits(opts, avoids)),
-      optionsLiverComplaint(opts),
-      optionsSimilarity(opts, requireProteinVariety: requireProteinVariety),
+      avoidComplaint(_hits(opts, avoids, forgive)),
+      if (!skipLiver) optionsLiverComplaint(opts),
+      optionsSimilarity(opts,
+          requireProteinVariety: requireProteinVariety,
+          requireCuisineVariety: requireCuisineVariety),
     ].where((String s) => s.isNotEmpty).toList();
     return parts.join('; ');
   }
@@ -310,20 +424,29 @@ class Chef {
   /// fewer broken liver limits; ties go to the more varied set.
   static bool _isBetter(List<MealOption> a, List<MealOption> b,
       List<String> avoids,
-      {required bool requireProteinVariety}) {
-    final int badA = optionsAvoidHits(a, avoids).length;
-    final int badB = optionsAvoidHits(b, avoids).length;
+      {required bool requireProteinVariety,
+      bool requireCuisineVariety = true,
+      bool skipLiver = false,
+      String forgive = ''}) {
+    final int badA = _hits(a, avoids, forgive).length;
+    final int badB = _hits(b, avoids, forgive).length;
     if (badA != badB) {
       return badA < badB;
     }
-    final int liverA = optionsLiverFlags(a).length;
-    final int liverB = optionsLiverFlags(b).length;
-    if (liverA != liverB) {
-      return liverA < liverB;
+    if (!skipLiver) {
+      final int liverA = optionsLiverFlags(a).length;
+      final int liverB = optionsLiverFlags(b).length;
+      if (liverA != liverB) {
+        return liverA < liverB;
+      }
     }
-    return optionsSimilarity(a, requireProteinVariety: requireProteinVariety)
+    return optionsSimilarity(a,
+                requireProteinVariety: requireProteinVariety,
+                requireCuisineVariety: requireCuisineVariety)
             .length <
-        optionsSimilarity(b, requireProteinVariety: requireProteinVariety)
+        optionsSimilarity(b,
+                requireProteinVariety: requireProteinVariety,
+                requireCuisineVariety: requireCuisineVariety)
             .length;
   }
 
@@ -335,6 +458,8 @@ class Chef {
     required String request,
     required List<String> justShown,
     required List<String> recentForms,
+    bool hungryRoot = false,
+    List<HungryRootPairing> pairings = const <HungryRootPairing>[],
     String complaint = '',
   }) async {
     final String req = request;
@@ -342,8 +467,43 @@ class Chef {
     final String knownPrices = formatKnownPrices(prices, pantry);
     final String equipment = formatEquipment(await ChefKeys.getEquipment());
     final String formList = kDishForms.join(', ');
+    // Replication only happens on "Cook something". A craving typed into
+    // Wife's Request is a different question, and handing the model a
+    // catalogue to copy from at the same time would just fight it: there,
+    // the mode means his delivery food comes first and nothing more.
+    final bool replicate = hungryRoot && !hasReq && pairings.isNotEmpty;
 
-    final String task = hasReq
+    final String task = replicate
+        ? '''
+Below is HungryRoot's own cookbook, filtered down to the recipes that use the
+food he has. Propose exactly $kOptionCount dinners, and take every one of
+them from this list: reproduce the recipe, by its name, with the food in this
+kitchen.
+
+HUNGRYROOT RECIPES HE HAS THE FOOD FOR:
+${_pairingList(pairings)}
+
+Put the recipe's exact name, copied character for character from the list, in
+the "hungryroot" field of that option. "title" may read more plainly if the
+catalogue name is a mouthful, but the dish has to be the same dinner.
+
+WHEN NOT TO USE THE LIST. Two of these recipes are sometimes the same dinner
+twice over, and serving him the same thing in two hats is worse than ignoring
+the catalogue. If a recipe would repeat one you have already taken, DO NOT
+take it: invent your own dinner from the same food instead, and leave that
+option's "hungryroot" field EMPTY. The same applies when the list runs out of
+things he can really cook tonight. An honest idea of your own always beats a
+recipe he does not have the food for.
+
+The [HUNGRYROOT] items in the pantry are what the box delivered and they are
+what this is built on. The rest of the pantry fills in around them: the oil,
+the rice, the vegetable, the spices. New buys are a last resort here, because
+the point of the mode is that dinner is already in the house.
+
+Do not force variety onto this. Three recipes from one delivery may well
+share a protein and a cuisine, and that is fine. Only the KIND of dinner has
+to differ: no two may be the same form.'''
+        : hasReq
         ? '''
 The user has a SPECIFIC REQUEST for this meal:
 "$req"
@@ -354,7 +514,13 @@ $kOptionCount ordinary dinners a home cook would recognise, and wildly different
 ones: no two may be the same KIND of dish (a stew and a curry are one kind), and
 no two may share a CUISINE. Repeating a protein is fine. Use pantry items where they
 fit; new buys are expected and fine to fulfil the request. Only prioritize an
-[EXPIRING SOON] item if it suits the request.'''
+[EXPIRING SOON] item if it suits the request.${hungryRoot ? '''
+
+He is cooking out of a HungryRoot delivery tonight, so the [HUNGRYROOT] items
+come first: build what he asked for around them wherever they can honestly
+serve it. Where the request simply cannot be made from them, say so by using
+the rest of the pantry instead, and keep new buys to the one or two things the
+request really needs.''' : ''}'''
         : '''
 Propose exactly $kOptionCount dinner options. Every one of them must be an
 ordinary dinner a home cook would recognise and could name in a few plain words
@@ -383,7 +549,9 @@ whichever option it honestly belongs in.''';
     final String avoids = formatAvoids(await ChefKeys.getAvoids());
     final String user = '''
 CURRENT PANTRY (what's in stock — use [EXPIRING SOON] items where they fit,
-never by forcing them; prices shown are per gram or per unit):
+never by forcing them; prices shown are per gram or per unit).${hungryRoot ? '''
+Items marked [HUNGRYROOT] came in his delivery and are what this meal is built
+on; everything else is there to fill in around them.''' : ''}
 ${formatPantry(pantry)}
 ${knownPrices.isEmpty ? '' : '''
 
@@ -399,7 +567,10 @@ AVOID — the COMPLETE list of foods to keep out of these meals. Each entry
 covers its whole group, not just the words written: no option may use anything
 listed under it. Nothing else is off limits: do NOT refuse or omit any other
 ingredient on taste grounds.
-$avoids
+$avoids${hungryRoot ? '''
+This list binds anything YOU reach for. It does not bind the [HUNGRYROOT]
+items already on the shelf: he chose those and paid for them, so if one of
+them is on the list, cook it anyway and say nothing about it.''' : ''}
 
 RECENTLY MADE${hasReq ? ' (context only — you MAY reuse one if it matches the request)' : ' — do NOT repeat any of these'}:
 ${recentMeals.isEmpty ? '(none yet)' : recentMeals.map((String m) => '- $m').join('\n')}
@@ -421,12 +592,21 @@ Cooking for $servings ${servings == 1 ? 'person' : 'people'}.
 
 $task
 
+${hungryRoot ? '''
+LIVER AND WEIGHT, AS TECHNIQUE ONLY. He is eating for weight loss and for a
+fatty liver, and in this mode that shapes HOW the food is cooked, not whether
+a dish is allowed: as little added fat as it honestly needs, olive oil rather
+than butter, nothing deep-fried, whole grains where there is a choice. He
+bought this food and he is eating it tonight, so do NOT drop a component,
+shrink a portion, or reject a recipe over its saturated fat or its sugar.
+Report the numbers honestly in the fields below and leave the judging alone.
+''' : '''
 LIVER AND WEIGHT: every one of the $kOptionCount options must already sit inside the fatty
 liver rules as written — no more than ~7g saturated fat and ~6g added sugar per
 serving, at least ~8g fiber, whole grains rather than refined, olive oil as the
 fat, nothing deep-fried, no alcohol, no cured or processed meat. Do not offer a
 dish you would then have to apologise for. If a familiar dinner needs lightening
-to get there, lighten it and say so in one clause of "desc".
+to get there, lighten it and say so in one clause of "desc".'''}
 
 SIDES ARE OPTIONAL. Add a simple vegetable side (and a starch) only where the
 meal genuinely wants one — a stew, a curry or a loaded bowl is already dinner
@@ -456,13 +636,15 @@ prices above for pantry/known items; estimate typical grocery prices for the
 rest.
 
 Respond with ONLY valid JSON, no markdown, in exactly this shape:
-{"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","proteinPerServing":0,"caloriesPerServing":0,"satFatPerServing":0,"addedSugarPerServing":0,"fiberPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
+{"options":[{"title":"","desc":"","protein":"","form":"","cuisine":"","sides":"","newBuys":"","hungryroot":"","proteinPerServing":0,"caloriesPerServing":0,"satFatPerServing":0,"addedSugarPerServing":0,"fiberPerServing":0,"estCostTotal":0,"estCostPerServing":0}]}
 "desc" is one plain sentence that makes him want it — say what it looks and
 tastes like on the plate (what's crisp, what's saucy, what it's spooned over),
 not a list of ingredients and never a sales pitch.
 "satFatPerServing", "addedSugarPerServing" and "fiberPerServing" are grams per
 serving for everything on the plate — the liver numbers, estimated honestly, not
 rounded down to look good.
+"hungryroot" is the HungryRoot recipe this option reproduces, named exactly
+as the list above names it, or "" when the dinner is your own idea.${replicate ? '' : ' In this request it is always "".'}
 "form" is one entry from the form list above. "cuisine" is a short label
 (e.g. "Thai", "Tex-Mex", "Mediterranean"). "sides" names the vegetable side and
 any starch, or is "" when the dish needs none. "newBuys" is a short comma list
@@ -494,19 +676,29 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
     required int servings,
     required List<PantryItem> pantry,
     PriceBook prices = const PriceBook(),
+    HungryRootPairing? source,
   }) async {
     final List<String> avoids = await ChefKeys.getAvoids();
+    // A replicated dinner forgives the avoid list the same way the options
+    // call did, and for the same reason: the food is his, already bought.
+    final String boxFood = source == null ? '' : _boxText(pantry);
     Recipe out = await _askRecipe(
-        option: option, servings: servings, pantry: pantry, prices: prices);
-    List<AvoidHit> hits = recipeAvoidHits(out, avoids);
+        option: option,
+        servings: servings,
+        pantry: pantry,
+        prices: prices,
+        source: source);
+    List<AvoidHit> hits = forgivenHits(recipeAvoidHits(out, avoids), boxFood);
     if (hits.isNotEmpty) {
       final Recipe retry = await _askRecipe(
           option: option,
           servings: servings,
           pantry: pantry,
           prices: prices,
+          source: source,
           complaint: avoidComplaint(hits));
-      final List<AvoidHit> retryHits = recipeAvoidHits(retry, avoids);
+      final List<AvoidHit> retryHits =
+          forgivenHits(recipeAvoidHits(retry, avoids), boxFood);
       if (retryHits.length < hits.length) {
         out = retry;
         hits = retryHits;
@@ -525,6 +717,7 @@ any starch, or is "" when the dish needs none. "newBuys" is a short comma list
     required int servings,
     required List<PantryItem> pantry,
     PriceBook prices = const PriceBook(),
+    HungryRootPairing? source,
     String complaint = '',
   }) async {
     final String knownPrices = formatKnownPrices(prices, pantry);
@@ -551,6 +744,24 @@ its steps, sequenced so everything lands together (start what takes longest
 first; say when to start the side). Keep the side simple — it is a side —
 but not bare: season it and give it some colour.'''}
 
+${source == null ? '' : '''
+THIS DINNER IS A HUNGRYROOT RECIPE, AND THIS IS THEIR CARD FOR IT:
+---
+${source.name}
+Serves ${source.servings}. HungryRoot says ${source.cookingTime} minutes.
+${source.method}
+---
+Reproduce that meal. Their card was written for a kitchen with one skillet and
+for components that arrive pre-cut and pre-cooked in a box; he is cooking it
+from his own shelf, so the amounts, the prep and the appliance are yours to
+get right. What is NOT yours to change is the dish: the same components, the
+same flavours, the same thing on the plate. Do not improve it into something
+else, do not add a component it never had, and do not drop one because the
+card leaves it unseasoned.
+Where the card is vague about an amount, weigh it from the pantry. Where he
+does not have a component, use the closest thing he does have and say so in
+"notes", in one clause.
+'''}
 PANTRY (the complete list of what the user has on hand; prices are per gram or
 per unit):
 ${formatPantry(pantry)}
@@ -572,12 +783,21 @@ ${complaint.isEmpty ? '' : '''
 YOUR LAST ATTEMPT BROKE THE AVOID LIST: $complaint. Rewrite the recipe without
 it — swap in something the list allows, or change the dish.'''}
 
+${source != null ? '''
+LIVER AND WEIGHT, AS TECHNIQUE ONLY. He is eating for weight loss and for a
+fatty liver, so cook this the healthiest way it can honestly be cooked: as
+little added fat as it needs, olive oil rather than butter, nothing deep-fried,
+whole grains where there is a choice. That is the METHOD. Do not shrink a
+portion, drop a component or lecture him about the meal's numbers. Report them
+in "notes" plainly and leave it there.
+''' : '''
 LIVER LIMITS FOR THIS RECIPE (per serving, everything on the plate): at most
 ~7g saturated fat, at most ~6g added sugar, at least ~8g fiber. Olive oil is the
 fat and you state its grams. No butter, cream or coconut milk. No alcohol in any
 step. No cured or processed meat. No deep-frying or batter-frying. Whole grains
 rather than refined. This is where a lightened dish usually slips back — the
 option was approved on these numbers, so the method has to hold them.
+'''}
 
 For every ingredient NOT in that pantry list, append " (new buy)" to its name in
 the ingredients list. Do not imply the user already has anything not listed.
@@ -1229,6 +1449,28 @@ or macro accounting, no diet commentary on the meal itself.''';
   }
 
   /// One line per in-stock item for the prompt.
+  /// HungryRoot's own recipes, as the chef sees them. The method text is
+  /// theirs, unedited: it is what names the components, and it is what the
+  /// chef is being asked to reproduce.
+  @visibleForTesting
+  static String formatPairings(List<HungryRootPairing> ps) => _pairingList(ps);
+
+  static String _pairingList(List<HungryRootPairing> ps) {
+    final StringBuffer sb = StringBuffer();
+    for (final HungryRootPairing p in ps) {
+      sb.writeln('• ${p.name}');
+      sb.writeln(
+          '  serves ${p.servings}, HungryRoot says ${p.cookingTime} min');
+      for (final String line in p.method.split('\n')) {
+        sb.writeln('  - $line');
+      }
+      if (p.nutrition.isNotEmpty) {
+        sb.writeln('  (${p.nutrition})');
+      }
+    }
+    return sb.toString().trimRight();
+  }
+
   static String formatPantry(List<PantryItem> pantry) {
     final DateTime now = DateTime.now();
     // Include tracked items with stock left, plus spices / on-hand items
@@ -1254,7 +1496,9 @@ or macro accounting, no diet commentary on the meal itself.''';
     final StringBuffer sb = StringBuffer();
     for (final PantryItem it in live) {
       if (it.untracked) {
-        sb.writeln('- ${it.name}: ${it.spice ? '(spice — always on hand)' : '(on hand, amount unknown)'}');
+        sb.writeln('- ${it.name}: '
+            '${it.spice ? '(spice — always on hand)' : '(on hand, amount unknown)'}'
+            '${it.hungryroot ? '  [HUNGRYROOT]' : ''}');
         continue;
       }
       final String amt = it.isCount
@@ -1267,6 +1511,9 @@ or macro accounting, no diet commentary on the meal itself.''';
       }
       if (it.isExpiringSoon(now)) {
         sb.write('  [EXPIRING SOON]');
+      }
+      if (it.hungryroot) {
+        sb.write('  [HUNGRYROOT]');
       }
       if (!it.macros.isEmpty && it.servingSize > 0) {
         sb.write(

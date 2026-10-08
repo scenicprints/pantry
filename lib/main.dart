@@ -416,6 +416,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
           servingSize: item.servingSize,
           servingUnit: item.servingUnit,
           lastTotal: item.total,
+          hungryroot: item.hungryroot,
         ));
       });
 
@@ -558,6 +559,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
         servingSize: q.servingSize,
         servingUnit: q.servingUnit,
         price: q.lastPrice,
+        hungryroot: q.hungryroot,
         total: q.lastTotal,
       ),
     );
@@ -1017,6 +1019,7 @@ class _PantryTabState extends State<PantryTab> {
                   style: const TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w600)),
             ),
+            if (it.hungryroot) _badge('HUNGRYROOT', kAccent),
             if (it.spice)
               _badge('SPICE', kOlive)
             else if (it.quantityUnknown)
@@ -1316,6 +1319,7 @@ class AddPrefill {
   final double? total;
   final double? price;
   final String? macrosNote;
+  final bool hungryroot;
 
   const AddPrefill({
     this.name,
@@ -1327,6 +1331,7 @@ class AddPrefill {
     this.total,
     this.price,
     this.macrosNote,
+    this.hungryroot = false,
   });
 }
 
@@ -1357,6 +1362,7 @@ class _AddItemPageState extends State<AddItemPage> {
   late String _servingUnit; // one of kServingUnits, or '__custom__'
   bool _spice = false;
   bool _quantityUnknown = false;
+  bool _hungryroot = false;
 
   /// Amount/cost aren't tracked for spices or quantity-unknown items.
   bool get _untracked => _spice || _quantityUnknown;
@@ -1369,6 +1375,7 @@ class _AddItemPageState extends State<AddItemPage> {
     final Macros m = e?.macros ?? p?.macros ?? const Macros();
     _spice = e?.spice ?? false;
     _quantityUnknown = e?.quantityUnknown ?? false;
+    _hungryroot = e?.hungryroot ?? p?.hungryroot ?? false;
     _unit = e?.unit ?? p?.unit ?? kUnitGrams;
     _name = TextEditingController(text: e?.name ?? p?.name ?? '');
     _barcode = TextEditingController(text: e?.barcode ?? p?.barcode ?? '');
@@ -1479,6 +1486,7 @@ class _AddItemPageState extends State<AddItemPage> {
       updatedAtMs: nowMs,
       spice: _spice,
       quantityUnknown: _quantityUnknown,
+      hungryroot: _hungryroot,
     );
     Navigator.pop(context, item);
   }
@@ -1708,6 +1716,15 @@ class _AddItemPageState extends State<AddItemPage> {
           'Its own pantry category. Never-ending, no cost to track.',
           _spice,
           (bool v) => setState(() => _spice = v)),
+      const SizedBox(height: 8),
+      // Provenance, not tracking: everything above changes how the item is
+      // weighed and costed, this one only says where it came from. It is
+      // what HungryRoot mode on the Cook tab cooks from.
+      _toggleRow(
+          'From HungryRoot',
+          'Came in the box. Weighed and costed like anything else.',
+          _hungryroot,
+          (bool v) => setState(() => _hungryroot = v)),
     ]);
   }
 

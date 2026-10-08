@@ -27,6 +27,11 @@ class LocalCache {
 
   static Map<String, dynamic> _prefs = <String, dynamic>{};
 
+  /// Where every cache file above lives. Exposed so a cache that isn't part
+  /// of the pantry document (the HungryRoot catalogue) can sit beside them
+  /// without working the directory out for itself.
+  static late Directory filesDir;
+
   static Future<void> init() async {
     // systemTemp on Android = /data/user/0/<package>/cache; go up to /files/.
     // On iOS it's <container>/tmp, whose sibling the system keeps across app
@@ -39,6 +44,7 @@ class LocalCache {
     if (!filesDir.existsSync()) {
       filesDir.createSync(recursive: true);
     }
+    LocalCache.filesDir = filesDir;
     _file = File('${filesDir.path}/pantry_cache.json');
     _historyFile = File('${filesDir.path}/meal_history.json');
     _plannedFile = File('${filesDir.path}/planned_meals.json');

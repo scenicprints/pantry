@@ -52,6 +52,11 @@ class MealOption {
   final double fiberPerServing;
   final double estCostTotal; // estimated whole-meal cost (0 = not provided)
   final double estCostPerServing; // estimated cost per serving
+  // The HungryRoot recipe this option reproduces, named exactly as their
+  // catalogue names it. Empty for the chef's own ideas, which is every
+  // option when HungryRoot mode is off — and the one it has to invent when
+  // the catalogue would otherwise have served the same dinner twice.
+  final String hungryRootName;
 
   const MealOption({
     required this.title,
@@ -68,6 +73,7 @@ class MealOption {
     this.fiberPerServing = 0,
     this.estCostTotal = 0,
     this.estCostPerServing = 0,
+    this.hungryRootName = '',
   });
 
   factory MealOption.fromJson(Map<String, dynamic> j) => MealOption(
@@ -85,7 +91,11 @@ class MealOption {
         fiberPerServing: _num(j['fiberPerServing']),
         estCostTotal: _num(j['estCostTotal']),
         estCostPerServing: _num(j['estCostPerServing']),
+        hungryRootName: (j['hungryroot'] as String?)?.trim() ?? '',
       );
+
+  /// True when this option reproduces a real HungryRoot recipe.
+  bool get fromHungryRoot => hungryRootName.isNotEmpty;
 
   /// A short "form · cuisine" line for the option card ('' if unknown).
   String get shape {
@@ -154,7 +164,7 @@ String formFamily(String form) {
 ///    Two chicken dinners that are genuinely different dishes are fine; all
 ///    of them on one protein is still one dinner in three hats.
 String optionsSimilarity(List<MealOption> opts,
-    {bool requireProteinVariety = true}) {
+    {bool requireProteinVariety = true, bool requireCuisineVariety = true}) {
   if (opts.length < 2) {
     return '';
   }
@@ -163,8 +173,9 @@ String optionsSimilarity(List<MealOption> opts,
   final List<String> problems = <String>[
     _repeats(opts.map((MealOption o) => formFamily(o.form)).toList(), opts,
         'kind of dish'),
-    _repeats(opts.map((MealOption o) => _norm(o.cuisine)).toList(), opts,
-        'cuisine'),
+    if (requireCuisineVariety)
+      _repeats(opts.map((MealOption o) => _norm(o.cuisine)).toList(), opts,
+          'cuisine'),
     if (requireProteinVariety) _allShare(proteins, 'protein'),
   ].where((String s) => s.isNotEmpty).toList();
   return problems.join('; ');

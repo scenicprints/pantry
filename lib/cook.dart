@@ -11,6 +11,7 @@ import 'cook_session.dart';
 import 'menu_sync.dart';
 import 'cooked_handoff.dart';
 import 'hungryroot.dart';
+import 'hungryroot_catalog.dart';
 import 'liver.dart';
 import 'models.dart';
 import 'notifications.dart';
@@ -51,11 +52,17 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   List<PlannedMeal> _planned = <PlannedMeal>[];
   RecipeBox _box = const RecipeBox();
   bool _hasKey = false;
+  bool _hungryRoot = false;
+
+  /// The catalogue slice the last ask was built from, kept so that picking
+  /// an option can hand the chef the card it is reproducing.
+  List<HungryRootPairing> _pairings = const <HungryRootPairing>[];
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _hungryRoot = ChefKeys.hungryRootMode;
     _history = MealHistory.decode(LocalCache.loadHistory());
     _planned = PlannedMenu.decode(LocalCache.loadPlanned()).meals;
     _box = RecipeBox.decode(LocalCache.loadRecipeBox());
@@ -80,6 +87,12 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _syncMenu();
+      // The mode travels in chef.json, so it may have been flipped on the
+      // other device while this one was in the background.
+      final bool mode = ChefKeys.hungryRootMode;
+      if (mode != _hungryRoot && mounted) {
+        setState(() => _hungryRoot = mode);
+      }
     }
   }
 
@@ -208,6 +221,10 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
     ));
   }
 
+  /// What the box delivered and he still has.
+  List<PantryItem> get _boxStock =>
+      HungryRootCatalog.hungryRootStock(widget.items);
+
   int get _expiringCount {
     final DateTime now = DateTime.now();
     return widget.items
@@ -216,22 +233,51 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
         .length;
   }
 
+  /// True only when the switch is on AND there is delivery food to cook.
+  bool get _hrOn => _hungryRoot && _boxStock.isNotEmpty;
+
   Future<void> _cook() async {
+    // The catalogue is fetched before the chef is asked, inside the same
+    // spinner, because a cook pressing one button should not be told about
+    // two steps. It fails to an empty list, which quietly means "cook his
+    // delivery food without reproducing anything".
     final List<MealOption>? options = await withSpinner<List<MealOption>>(
       context,
-      'Thinking up 3 options…',
-      () => Chef.generateOptions(
-        pantry: widget.items,
-        servings: _servings,
-        recentMeals: _history.recent(),
-        recentForms: _history.frequentShapes(),
-        prices: widget.prices,
-      ),
+      _hrOn ? 'Reading the HungryRoot cookbook…' : 'Thinking up 3 options…',
+      () async {
+        final List<HungryRootPairing> pairings = _hrOn
+            ? await HungryRootCatalog.candidates(widget.items)
+            : const <HungryRootPairing>[];
+        _pairings = pairings;
+        return Chef.generateOptions(
+          pantry: widget.items,
+          servings: _servings,
+          recentMeals: _history.recent(),
+          recentForms: _history.frequentShapes(),
+          prices: widget.prices,
+          hungryRoot: _hrOn,
+          pairings: pairings,
+        );
+      },
     );
     if (options == null || !mounted) {
       return;
     }
     _openOptions(options, null);
+  }
+
+  /// The recipe [o] says it reproduces, if it is one we actually showed.
+  HungryRootPairing? _sourceFor(MealOption o) {
+    if (!o.fromHungryRoot) {
+      return null;
+    }
+    final String want = o.hungryRootName.toLowerCase().trim();
+    for (final HungryRootPairing p in _pairings) {
+      if (p.name.toLowerCase().trim() == want) {
+        return p;
+      }
+    }
+    return null;
   }
 
   /// "Cook a request" — describe a craving, get 3 tailored options.
@@ -250,6 +296,7 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
         recentForms: _history.frequentShapes(),
         prices: widget.prices,
         request: request,
+        hungryRoot: _hrOn,
       ),
     );
     if (options == null || !mounted) {
@@ -276,12 +323,15 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
           prices: widget.prices,
           request: request,
           justShown: shown.map((MealOption o) => o.title).toList(),
+          hungryRoot: _hrOn,
+          pairings: request == null ? _pairings : const <HungryRootPairing>[],
         ),
         onPick: (MealOption o) => Chef.generateRecipe(
             option: o,
             servings: _servings,
             pantry: widget.items,
-            prices: widget.prices),
+            prices: widget.prices,
+            source: _sourceFor(o)),
         onPlan: _addPlanned,
         onSave: _saveRecipe,
         onUpdate: _updatePlanned,
@@ -407,6 +457,8 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
           const SizedBox(height: 12),
           _recipeBoxTile(),
         ],
+        const SizedBox(height: 12),
+        _hungryRootToggle(),
         const SizedBox(height: 24),
         _servingsStepper(),
         const SizedBox(height: 24),
@@ -595,6 +647,63 @@ class _CookTabState extends State<CookTab> with WidgetsBindingObserver {
           const Icon(Icons.chevron_right_rounded, color: kMuted),
         ]),
       ),
+    );
+  }
+
+  /// HUNGRYROOT MODE.
+  ///
+  /// On, dinner is built out of what the box delivered and the chef is
+  /// handed HungryRoot's own cookbook to reproduce from. It sits here, above
+  /// COOKING FOR, because it changes what "Cook something" means and he
+  /// should see which way it is set before he presses it.
+  ///
+  /// The switch is dead with nothing tagged, and says so rather than
+  /// pretending: a mode that silently does nothing is worse than a greyed
+  /// one that tells you what it wants.
+  Widget _hungryRootToggle() {
+    final int n = _boxStock.length;
+    final bool usable = n > 0;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 12, 10, 12),
+      decoration: BoxDecoration(
+          color: kCard,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+              color: _hungryRoot && usable
+                  ? kAccent.withValues(alpha: 0.7)
+                  : kBorder)),
+      child: Row(children: <Widget>[
+        Expanded(
+          child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text('HUNGRYROOT',
+                    style: labelCaps(
+                        color: _hungryRoot && usable ? kAccent : kMuted)),
+                const SizedBox(height: 3),
+                Text(
+                    !usable
+                        ? 'Mark what came in the box and this turns on.'
+                        : _hungryRoot
+                            ? 'Cooking their recipes from your $n delivery '
+                                '${n == 1 ? 'item' : 'items'}.'
+                            : '$n delivery ${n == 1 ? 'item' : 'items'} in '
+                                'stock.',
+                    style: TextStyle(
+                        fontSize: 12.5, color: kMuted, height: 1.3)),
+              ]),
+        ),
+        Switch(
+            value: _hungryRoot && usable,
+            activeTrackColor: kAccent,
+            onChanged: usable
+                ? (bool v) {
+                    setState(() => _hungryRoot = v);
+                    ChefKeys.setHungryRootMode(v);
+                    ChefSync.pushSoon();
+                  }
+                : null),
+      ]),
     );
   }
 
@@ -900,6 +1009,20 @@ class _OptionsScreenState extends State<OptionsScreen> {
                 style: labelCaps(color: kAccent)),
           const SizedBox(height: 6),
           Text(o.title, style: serif(size: 21, weight: FontWeight.w600)),
+          // Which of the three are really HungryRoot's and which one the
+          // chef had to invent, said plainly on the card rather than left
+          // for him to guess from the title.
+          if (o.fromHungryRoot) ...<Widget>[
+            const SizedBox(height: 6),
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: <Widget>[
+              const Icon(Icons.inventory_2_rounded, size: 13, color: kAccent),
+              const SizedBox(width: 6),
+              Expanded(
+                  child: Text('HungryRoot · ${o.hungryRootName}',
+                      style: TextStyle(
+                          fontSize: 12, color: kAccent, height: 1.3))),
+            ]),
+          ],
           if (o.desc.isNotEmpty) ...<Widget>[
             const SizedBox(height: 4),
             Text(o.desc,

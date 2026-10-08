@@ -39,6 +39,7 @@ class ChefProfile {
   final List<String> equipment;
   final List<String> avoids;
   final Map<String, List<String>> notes; // recipe title -> cook notes
+  final bool hungryRoot; // cooking out of the HungryRoot box
 
   const ChefProfile({
     required this.updatedAtMs,
@@ -46,6 +47,7 @@ class ChefProfile {
     required this.equipment,
     required this.avoids,
     required this.notes,
+    this.hungryRoot = false,
   });
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -54,11 +56,13 @@ class ChefProfile {
         'equipment': equipment,
         'avoids': avoids,
         'notes': notes,
+        'hungryroot': hungryRoot,
       };
 
   factory ChefProfile.fromJson(Map<String, dynamic> j) => ChefProfile(
         updatedAtMs: (j['updated_at_ms'] as num?)?.round() ?? 0,
         model: (j['model'] as String?) ?? 'haiku',
+        hungryRoot: j['hungryroot'] == true,
         equipment: ((j['equipment'] as List<dynamic>?) ?? <dynamic>[])
             .whereType<String>()
             .toList(),
@@ -126,6 +130,7 @@ class ChefSync {
         equipment: await ChefKeys.getEquipment(),
         avoids: await ChefKeys.getAvoids(),
         notes: LocalCache.allNotes(),
+        hungryRoot: ChefKeys.hungryRootMode,
       );
 
   /// Take a profile on board. Everything it carries replaces what is here.
@@ -134,6 +139,7 @@ class ChefSync {
     await ChefKeys.setEquipment(p.equipment);
     await ChefKeys.setAvoids(p.avoids);
     LocalCache.replaceNotes(p.notes);
+    ChefKeys.setHungryRootMode(p.hungryRoot);
     LocalCache.setPrefInt(_kProfileStamp, p.updatedAtMs);
   }
 
@@ -171,6 +177,7 @@ class ChefSync {
       equipment: me.equipment,
       avoids: me.avoids,
       notes: me.notes,
+      hungryRoot: me.hungryRoot,
     );
     final String body =
         const JsonEncoder.withIndent('  ').convert(out.toJson());

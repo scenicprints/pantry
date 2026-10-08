@@ -105,6 +105,11 @@ class PantryItem {
   bool deleted;
   bool spice; // a spice: own category, no weight/cost, effectively unlimited
   bool quantityUnknown; // have it, but amount + cost aren't tracked
+  // Came in a HungryRoot box. Pure provenance: it changes nothing about how
+  // the item is tracked, weighed or costed. It exists so the Cook tab can be
+  // put in HungryRoot mode and the chef can be told which food on the shelf
+  // is the delivery and which is his own shopping.
+  bool hungryroot;
 
   PantryItem({
     required this.id,
@@ -124,6 +129,7 @@ class PantryItem {
     this.deleted = false,
     this.spice = false,
     this.quantityUnknown = false,
+    this.hungryroot = false,
   });
 
   bool get isCount => unit == kUnitCount;
@@ -181,6 +187,7 @@ class PantryItem {
       'category': category,
       if (spice) 'spice': true,
       if (quantityUnknown) 'quantity_unknown': true,
+      if (hungryroot) 'hungryroot': true,
       if (deleted) 'deleted': true,
     };
     if (isCount) {
@@ -241,6 +248,7 @@ class PantryItem {
         deleted: j['deleted'] == true,
         spice: j['spice'] == true,
         quantityUnknown: j['quantity_unknown'] == true,
+        hungryroot: j['hungryroot'] == true,
       );
     }
     return PantryItem(
@@ -261,6 +269,7 @@ class PantryItem {
       deleted: j['deleted'] == true,
       spice: j['spice'] == true,
       quantityUnknown: j['quantity_unknown'] == true,
+      hungryroot: j['hungryroot'] == true,
     );
   }
 }
@@ -276,6 +285,7 @@ class QuickAddItem {
   String servingUnit;
   double? lastTotal;
   bool deleted;
+  bool hungryroot; // so re-adding a delivery item keeps its source
 
   QuickAddItem({
     required this.name,
@@ -287,6 +297,7 @@ class QuickAddItem {
     this.servingUnit = 'g',
     this.lastTotal,
     this.deleted = false,
+    this.hungryroot = false,
   });
 
   bool get isCount => unit == kUnitCount;
@@ -299,6 +310,7 @@ class QuickAddItem {
       if (servingSize > 0) 'serving_size': _round(servingSize),
       if (servingSize > 0) 'serving_unit': servingUnit,
       if (!macros.isEmpty) 'macros_per_serving': macros.toJson(),
+      if (hungryroot) 'hungryroot': true,
       if (deleted) 'deleted': true,
     };
     if (isCount) {
@@ -348,6 +360,7 @@ class QuickAddItem {
               : (j['last_total_weight_g'] as num?))
           ?.toDouble(),
       deleted: j['deleted'] == true,
+      hungryroot: j['hungryroot'] == true,
     );
   }
 }

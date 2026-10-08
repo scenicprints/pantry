@@ -1,5 +1,123 @@
 # Pantry — Roadmap / Backlog
 
+## HungryRoot mode (built, unreleased)
+
+He has been eating HungryRoot, so the food in the delivery is now a thing the
+app knows about and can cook from. Three parts, and they only make sense
+together.
+
+**An item can say it came in the box.** A `From HungryRoot` switch on the
+add/edit screen, a `hungryroot` flag on `PantryItem` (and on `QuickAddItem`,
+so a re-add keeps its source), and a HUNGRYROOT badge in the pantry list. It
+is pure provenance: nothing about weighing, costing or expiry changes, and
+the flag is absent rather than false on everything else.
+
+**A switch on the Cook tab.** It sits between the stats row and COOKING FOR,
+because it changes what "Cook something" means and he should see which way
+it is set before he presses it. It is dead with nothing tagged and says so
+instead of pretending. It rides in `chef.json` with the model and the avoid
+list, so phone and iPad agree, and it is re-read on resume.
+
+**It cooks from their cookbook, not from memory.** HungryRoot publishes the
+whole catalogue at `api.hungryroot.com/api/v3/pairings/` with no key and no
+login: real title, servings, cook time, the method as written, the nutrition
+panel. That endpoint is the only reason "replicate one of their meals" is a
+feature instead of the chef guessing at a brand it half remembers.
+
+### How the catalogue is read
+
+- **v3, not v2.** The same recipes are served twice. v2 carries the component
+  list with brands and gram amounts but costs 53 KB PER RECIPE; v3 is about
+  1.5 KB with the method text intact, and the method names the components
+  anyway. Nothing calls v2 today.
+- **There is no ingredient filter.** `tag` and `limit` work; `search`,
+  `product`, `ingredient`, `ordering` and `dish_type` are all accepted and
+  all ignored. So the matching is ours: three pages of a hundred featured
+  pairings, cached seven days in `hungryroot_catalog.json`, scored locally
+  against his tagged stock. A word in the TITLE counts double, and using two
+  of his things beats naming one of them three times.
+- **Failing is quiet.** Every path returns an empty list rather than
+  throwing. A dead network means the mode cooks his delivery food without
+  reproducing anything, which is still most of what the switch is for. A
+  refresh that fails keeps last week's cache.
+- **Near-duplicates are dropped before the chef sees them**, and the prompt
+  tells it that if a recipe would repeat one it has already taken, it must
+  invent its own dinner from the same food and leave `hungryroot` empty. His
+  call: three off the catalogue, but never the same dinner twice.
+
+### Measured against the live catalogue, not guessed
+
+Nothing compiles on the Windows machine, so the matcher was ported to Python
+and run against the real endpoint before any of this was called done. With a
+box of cilantro lime chicken, bok choy mix, ground turkey, egg tagliatelle
+and shredded brussels, out of 300 pulled pairings 163 scored above zero and
+the ten handed over led with:
+
+```
+ 16.0  Balsamic Chicken Sausage + Veggie Chiocciole Pasta   (serves 2, 12 min)
+ 15.0  Vodka Sauce Egg Tagliatelle Pasta with Turkey Meatballs (serves 2, 6 min)
+ 13.0  Saucy Green Chicken + Bok Choy Veggies               (serves 2, 10 min)
+ 12.0  Juicy Chicken with Roasted Potatoes + Brussels       (serves 2, 25 min)
+```
+
+The tagliatelle and the turkey found their own recipe, the chicken and the
+bok choy found theirs, and the dedupe dropped five more chicken dinners that
+were the same plate under other names.
+
+The costs, also measured: **464 KB over the wire** for the three pages,
+**277 KB** for the trimmed cache on disk, and about **1,300 tokens** added to
+the options prompt by the ten recipes. Once a week, and the options call is
+the one that does not think, so the latency is a fetch and not a reasoning
+pass.
+
+**The API filters by user agent.** `Python-urllib` is refused with a 403,
+which is how this was found. The app's own
+`Pantry (github.com/scenicprints/pantry)` is accepted, as are curl's and
+Dart's defaults. Worth remembering if the mode ever goes quiet: a 403 looks
+exactly like an empty catalogue from inside the app.
+
+### What the mode changes about the chef, and why
+
+| | Normally | HungryRoot mode |
+|---|---|---|
+| Liver limits | a gate: break them and the options are re-asked | **technique only** — how it's cooked, which fat, how much. A pairing is never rejected for arriving at 9g of saturated fat |
+| Avoid list | hard, on everything | hard on anything the CHEF reaches for; a component that came in the box is cooked without comment |
+| Variety | different form, cuisine and not-all-one-protein | **form only.** Three recipes out of one delivery will share a cuisine and often a protein |
+
+The liver call is his, asked directly, and matches the paste-a-card screen:
+the food is bought and portioned and he is eating it tonight, so the rules
+survive as method and nothing else.
+
+Forgiving the avoid list is deliberately narrow. A hit is dropped only when
+the term the list caught is ITSELF in the box, matched as a whole phrase with
+plurals tolerated on either side. The loose version — forgive a term because
+one of its words appears somewhere in the delivery — waves "blue cheese"
+through on a box of cheese tortellini. Where this is wrong it is wrong in the
+safe direction. `Chef.forgivenHits` is the rule and it is tested.
+
+### The edges, decided
+
+- **Replication is for "Cook something" only.** Wife's Request keeps the
+  mode's other half — his delivery food comes first — but is handed no
+  catalogue. A craving and a cookbook to copy from are two instructions that
+  fight, and the craving wins.
+- **Picking a replicated option hands the recipe call their actual card**, so
+  the full grams recipe reproduces that meal rather than a dish with the same
+  name. It may fix the amounts, the prep and the appliance; it may not change
+  the dish.
+- **The option card says which ideas are really theirs** and names the
+  recipe, so the one the chef had to invent is not disguised as HungryRoot's.
+
+### Still open
+
+- The catalogue slice is the first 300 featured pairings, not his actual
+  weekly menu, which needs a login. If matches come back thin, the lever is
+  the `tag` filter (it works: `tag=25` is high protein), narrowing by the
+  primary-protein tags before scoring.
+- `hungryroot_catalog.json` is never pruned. It is one 277 KB file of 300
+  trimmed entries, rewritten whole on refresh, so there is nothing to prune
+  yet.
+
 ## Host Hub — removed
 
 Gone, not deprecated. It was built, it was used a little, and it was a bust:
