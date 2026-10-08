@@ -1,6 +1,6 @@
 # Pantry — Roadmap / Backlog
 
-## HungryRoot mode (built, unreleased)
+## HungryRoot mode (released in v0.27.0)
 
 He has been eating HungryRoot, so the food in the delivery is now a thing the
 app knows about and can cook from. Three parts, and they only make sense
@@ -107,6 +107,30 @@ safe direction. `Chef.forgivenHits` is the rule and it is tested.
   the dish.
 - **The option card says which ideas are really theirs** and names the
   recipe, so the one the chef had to invent is not disguised as HungryRoot's.
+
+### What shipping it looked like
+
+Green on the FIRST CI run this time, which is new: analyze clean, 256 tests.
+What bought that was a throwaway Dart string lexer, written before the push
+and not kept: a scanner that tracks string state instead of balancing
+delimiters, so it catches the two faults that cost runs before — a
+single-quoted string crossing a newline, and a possessive apostrophe closing
+a string mid-word, which balances perfectly and does not parse. It found one
+of each here. If this keeps paying off it belongs in the repo as a tool
+rather than being rewritten each time.
+
+v0.27.0: APK released, and iOS build 222 shipped to TestFlight from the
+manual `ios.yml` dispatch — App Store Connect reports it VALID and
+unexpired, so the iPad has it. Pushing code still never ships to TestFlight
+on its own.
+
+Checking that a build actually became installable, rather than merely
+uploading, is worth doing every time: the upload step succeeds long before
+Apple finishes ingesting, and the two are a good ten minutes apart. The
+read-only `asc-status` workflow in `scenicprints/mediaserver` answers it
+without a Mac. The App Store Connect key is account-wide, so that workflow
+lists Pantry's builds (3-digit) alongside Marquee's, and no equivalent is
+needed here.
 
 ### Still open
 
