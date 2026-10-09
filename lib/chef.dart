@@ -92,6 +92,105 @@ const List<String> kDefaultDevices = <String>[
 ];
 
 // ═══════════════════════════════════════════════════════════════════════
+// COOKWARE — the pans, pots and tools he actually owns. HARD-CODED on
+// purpose: unlike the appliance list there is no Settings UI for this and
+// there does not need to be. He replaced the whole kitchen with stainless in
+// one go, so this list is simply the truth until he buys something else.
+//
+// It exists because the chef was writing "a hot pan" and "medium-high heat"
+// into every recipe. He cooks on GAS with a 1-10 dial, on stainless plus one
+// cast iron skillet, and none of that behaves the way a generic recipe
+// assumes. The dial numbers live in [kHeatReference].
+// ═══════════════════════════════════════════════════════════════════════
+
+/// One pan or pot. [lid] carries more weight than it looks: a dish that has
+/// to be covered cannot be written for a pan that has no lid, and not one of
+/// his frying pans has one.
+class CookPan {
+  final String name;
+  final String material; // 'stainless' or 'cast iron'
+  final bool lid;
+  final String? note;
+  const CookPan(this.name, this.material, {this.lid = false, this.note});
+}
+
+/// Everything he cooks in. The complete list.
+const List<CookPan> kCookware = <CookPan>[
+  CookPan('8" cast iron skillet', 'cast iron',
+      note: 'holds heat; preheat at 3 for about 5 minutes before raising it. '
+          'Heats unevenly over a small flame — hot centre, cool rim — so '
+          'give it the time rather than a bigger number'),
+  CookPan('8" frying pan', 'stainless',
+      note: 'one portion or a side; too small for two mains without crowding'),
+  CookPan('10" frying pan', 'stainless',
+      note: 'the default pan for a dinner for two'),
+  CookPan('1.5 qt sauce pan', 'stainless', lid: true),
+  CookPan('3 qt sauce pan', 'stainless', lid: true),
+  CookPan('4 qt sauce pan', 'stainless', lid: true),
+  CookPan('6 qt stock pot', 'stainless',
+      lid: true,
+      note: 'has a pasta strainer insert made to fit it, so pasta and blanched '
+          'vegetables lift straight out — no colander needed'),
+];
+
+/// All stainless. Listed so the chef never calls for a tool he hasn't got.
+const List<String> kUtensils = <String>[
+  'ladle',
+  'skimmer',
+  'slotted turner',
+  'flat turner',
+  'pasta server',
+  'cooking spoon',
+  'slotted spoon',
+  'potato masher',
+  'egg whisk',
+  'tongs',
+  'flexible spatula',
+  'basting brush',
+];
+
+/// He has bakeware and it is all generic, so it is named by what it is and
+/// never by a size a recipe would then rely on.
+const List<String> kBakeware = <String>[
+  'a rimmed sheet pan',
+  'a baking dish',
+];
+
+/// The cookware block for the prompt: what he owns, what has a lid, and the
+/// few facts about stainless and cast iron that actually change a method.
+String formatCookware() {
+  final StringBuffer pans = StringBuffer();
+  for (final CookPan p in kCookware) {
+    final String lid = p.lid ? 'with a lid' : 'NO LID';
+    pans.writeln(p.note == null
+        ? '- ${p.name} (${p.material}, $lid)'
+        : '- ${p.name} (${p.material}, $lid) — ${p.note}');
+  }
+  return '''
+COOKWARE — the COMPLETE list of what he cooks in, as complete as the
+appliance list. Treat anything not on it as something he does not own.
+NOTHING IN THIS KITCHEN IS NONSTICK.
+${pans.toString().trimRight()}
+- Bakeware: ${kBakeware.join(', ')} — both generic, so never state a size.
+- Utensils, all stainless: ${kUtensils.join(', ')}.
+
+WHAT THAT MEANS FOR THE METHOD:
+- NO LID ON ANY FRYING PAN, or on the cast iron. A step that has to be
+  covered — steaming, a covered simmer, cheese melted under a lid — goes in
+  a sauce pan or the stock pot, or it does not go in the recipe at all.
+- Nothing is nonstick. Eggs and fish go in the cast iron, or into a stainless
+  pan that has passed the water test with the fat already in it. Never write a
+  step that assumes a slippery pan.
+- Every tool he owns is steel, so metal utensils are safe on everything. There
+  is no silicone and no wood in this kitchen.
+- Don't crowd the pan: packed food steams instead of browning. Two mains want
+  the 10", not the 8".
+- NAME THE PAN in the step ("the 10" stainless", "the cast iron") and give the
+  dial number with it. "A hot pan" is not an instruction he can follow.
+''';
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // AVOID LIST — foods the chef must never use. Editable in Settings, because
 // hardcoding dislikes meant the chef also invented its own (it kept refusing
 // yogurt). The list it is given each call is the COMPLETE truth.
@@ -563,6 +662,8 @@ EQUIPMENT — the ONLY appliances in this kitchen. Never propose a meal that
 needs anything not on this list:
 $equipment
 
+${formatCookware()}
+
 AVOID — the COMPLETE list of foods to keep out of these meals. Each entry
 covers its whole group, not just the words written: no option may use anything
 listed under it. Nothing else is off limits: do NOT refuse or omit any other
@@ -773,6 +874,8 @@ $knownPrices'''}
 EQUIPMENT — the ONLY appliances in this kitchen. Every step must be doable
 with these; never instruct the user to use anything else:
 $equipment
+
+${formatCookware()}
 
 AVOID — the COMPLETE list of foods to keep out of this recipe. Each entry
 covers its whole group, not just the words written. Nothing else is off limits
@@ -1069,6 +1172,8 @@ EQUIPMENT — the ONLY appliances in this kitchen. The card was written for
 somebody who might own none of them, so it defaults to a skillet. You know
 better. Never write a step that needs anything not on this list:
 $equipment
+
+${formatCookware()}
 
 WHAT YOU MAY CHANGE: the appliance, the order, the temperature, the timing,
 the technique, and the cooking fat — how much of it and which one.
@@ -1638,6 +1743,51 @@ or macro accounting, no diet commentary on the meal itself.''';
 // FIXED RULES — the chef's brain. Static, so it can be prompt-cached.
 // ═══════════════════════════════════════════════════════════════════════
 
+/// What the dial numbers mean on HIS stove: gas, a 1-10 dial, stainless pans
+/// and one cast iron skillet. Researched, not estimated. The pan-surface
+/// figures are America's Test Kitchen infrared readings, the water-test window
+/// is the Leidenfrost range of roughly 365-379F, browning starts near 285F,
+/// and a simmer is about a tenth of a burner's rated output — which is why
+/// his numbers sit so much lower than a recipe written for an electric coil.
+/// Used verbatim by BOTH system prompts.
+const String kHeatReference = '''
+HEAT — THE STOVE IS GAS WITH A 1-10 DIAL. GIVE A NUMBER, EVERY TIME.
+A number on a gas dial is a fraction of that burner's own output, not a
+temperature, so every heat instruction pairs the number with the check that
+confirms it. Never write "medium-high" and leave it at that.
+- 1-2   Simmer and hold. A simmer is roughly a tenth of a burner's maximum
+        output, which is why the number is this low. Liquid at 185-205F:
+        small bubbles, not a rolling boil.
+- 2-3   Eggs. About 250F for a soft omelet, 300F for tender scrambled curds.
+- 3-4   Quesadillas, grilled cheese, pancakes, sweating onions. Browning does
+        not begin until about 285F, so nothing below 3 will colour food.
+- 4-5   THE STAINLESS PREHEAT, and ordinary sauteing. 365-379F, 2-4 minutes.
+- 6-7   Searing: chicken, burgers, steak. Drop the heat once the crust sets.
+        A stainless pan left on plain medium climbs into the upper 500sF
+        inside 15 minutes, so a sear never needs the top of the dial.
+- 7-8   Stir-fry, the one weeknight job that genuinely wants hard heat.
+- 8-10  Bringing the stock pot to a boil with the lid on, then straight back
+        to 1-2 to hold it. Never under a dry pan.
+
+THE CHECKS — name the right one in the step that needs it:
+- WATER TEST, the gate before food goes into a stainless frying pan: flick a
+  few drops into the DRY pan, never with oil in it. Drops that bead up and
+  skitter = ready. Drops that sit flat = too cold. Drops that vanish on
+  contact = TOO HOT, so turn it down and let it settle.
+- BUTTER TEST for eggs, which cook below the water-test point: butter that
+  foams and bubbles = ready; butter that browns on contact = too hot; butter
+  that melts without bubbling = too cold.
+- THE OIL GOES IN AFTER the pan passes its test, and it should shimmer, never
+  smoke. Smoke means the number was too high.
+- FLAME: medium is a blue flame about 1-2 inches above the burner. If flame
+  licks up the sides of the pan, the number is too high for that pan.
+- DON'T MOVE IT. Stainless grips protein and lets go on its own once a crust
+  has formed. If it resists the turner it is not ready, and pulling early
+  tears it and leaves half of it stuck to the pan.
+- FOND IS DINNER. Deglaze the browned stuff into a sauce instead of treating
+  it as a mess.
+''';
+
 const String _systemPrompt = '''
 You are the user's personal chef. You invent meals for them like a real chef —
 you do not pull generic recipes. You always obey the profile and rules below.
@@ -1667,6 +1817,11 @@ USER PROFILE (hard rules — never violate):
   Never write a step that requires a missing appliance; adapt the method to
   what IS available (or pick a different dish). Where a listed device has a
   capability note, use it — it's there because it changes how to cook.
+- COOKWARE: the user message also lists every pan, pot and utensil he owns,
+  and that list is the complete truth exactly as the appliance list is.
+  NOTHING IS NONSTICK and no frying pan has a lid. Name the pan you mean in
+  the step, give its dial number, and never call for a pan, a lid or a tool
+  that is not on the list.
 - HEALTH (the reason this chef exists): the user is losing weight AND has a
   FATTY LIVER. Every meal is cooked for both at once. Goals: steady weight
   loss, high protein, high fiber, low saturated fat, low added sugar, plenty of
@@ -1901,9 +2056,7 @@ RECIPE OUTPUT FORMAT:
   order as though you were doing it, and if any step asks for something that
   already happened, delete it.
 
-HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
-rolling boil).
-
+$kHeatReference
 AIR FRYER REFERENCE (use this knowledge):
 - Diced potatoes small (~1cm): 12-15 min @ 200C/400F
 - Diced potatoes medium (~2cm): 18-20 min @ 200C/400F
@@ -2008,6 +2161,11 @@ HARD RULES (never violate):
 - EQUIPMENT: the user message lists the appliances in this kitchen. Never
   write a step that needs anything else. Owning them is not a reason to use
   them: the list is a permission, not a target.
+- COOKWARE: the user message lists every pan, pot and utensil in this kitchen,
+  and it is as complete as the appliance list. NOTHING IS NONSTICK and no
+  frying pan has a lid, which is exactly where a card written for a stranger
+  trips — it assumes one skillet and a cover to put on it. Name the pan in
+  each step and give its dial number.
 - ONE APPLIANCE IS THE TARGET, two is a ceiling you have to justify, three is
   wrong for a weeknight meal for two however well each one cooks its part.
   Every extra one is a preheat, a second thing to watch and a second thing to
@@ -2067,9 +2225,7 @@ TOVALA SMART OVEN REFERENCE (use ONLY if it's listed in EQUIPMENT):
   brown. Toast handles buns and bread dry, with no fat at all.
 - Countertop capacity: single layer, batch if needed.
 
-HEAT LEVEL REFERENCE: Simmer = about 3-4 on a 0-10 dial (small bubbles, not a
-rolling boil). High for a sear is 8-9 and the pan wants to be hot before the
-food goes in.
+$kHeatReference
 
 BEHAVIOR: brief and certain, the way a chef hands over a plan. Make the call
 rather than listing options. Don't flatter the card and don't sneer at it.
