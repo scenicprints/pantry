@@ -1,5 +1,69 @@
 # Pantry — Roadmap / Backlog
 
+## His cookware and his dial (released in v0.28.0)
+
+He switched the kitchen to stainless and said it plainly: you do not cook as
+hot on stainless. The chef knew nothing about any of it. It wrote "a hot pan"
+and "medium-high heat" into every recipe, and the only heat guidance in the
+whole prompt was one line claiming a simmer was 3-4 on a 0-10 dial and a sear
+was 8-9. That is an electric-coil assumption. He cooks on gas, and he was
+making quesadillas at 2.
+
+**The cookware is hard-coded.** There is no Settings UI for it and there does
+not need to be: he replaced the kitchen in one go, so `kCookware` is simply
+the truth until he buys something else. Nine pieces, the twelve stainless
+utensils and generic bakeware, injected into all three user turns beside
+EQUIPMENT and stated as complete the same way the pantry list is.
+
+The `lid` field turned out to be the one that does the work. Not one frying
+pan has a lid, so any step that must be covered goes to the Dutch oven, a
+sauce pan, the stock pot or the roaster, and a covered braise goes to the
+Dutch oven first because it is the only piece that browns on the hob and then
+carries the dish into the oven under its own lid. Nothing anywhere is
+nonstick, so eggs and fish go to the bare skillet or a water-tested stainless
+pan.
+
+Neither enamelled piece carries a size. The Lodge has no stamp and he does not
+know the roaster's capacity, so a quart figure would be invented and a recipe
+would size itself to it.
+
+### The dial numbers were researched, not estimated
+
+First pass I derived the table myself and showed it to him. He asked whether
+I could not research it instead, and the research moved two numbers: searing
+on stainless really is medium-high, 6-7, where I had capped it at 6. Behind
+the table are ATK's infrared pan-surface readings (250F for a soft omelet,
+300F for scrambled curds, 365F for pancakes), a browning floor near 285F, the
+Leidenfrost window of 365-379F for the water test, and a simmer at roughly a
+tenth of a burner's rated output, which is why his numbers sit so low.
+
+```
+1-2 simmer   2-3 eggs   3-4 browning   4-5 stainless preheat
+6-7 sear     7-8 stir-fry              8-10 boil the stock pot
+```
+
+**A dial number on gas is a fraction of that burner's own output, not a
+temperature.** That is why every heat instruction now carries the number AND
+the check that confirms it: the water test into a dry pan (vanishing drops
+mean too hot, not ready), the butter test for eggs because they cook below
+the water-test point, oil that shimmers and never smokes, and a flame that
+does not lick up the sides.
+
+### What the enamel corrected
+
+The first commit said metal utensils were safe on everything, which was true
+of a kitchen that was all stainless and one bare skillet. Then the Dutch oven
+and the roaster turned up. Enamel chips and every tool he owns is steel, with
+no silicone or wood to reach for, so the rule is split: unrestricted on the
+stainless and the bare cast iron, no scraping or knocking on the enamel, fond
+lifted with liquid. Neither enamelled piece is a searing pan either, and
+their enamel is non-reactive where the bare skillet is not, so acid is steered
+into the enamel or the stainless.
+
+`test/cookware_test.dart` (24) guards a lid appearing on a pan that has not
+got one, the table drifting back to 0-10 or to searing at 8-9, and the
+metal-utensil line coming back.
+
 ## HungryRoot mode (released in v0.27.0)
 
 He has been eating HungryRoot, so the food in the delivery is now a thing the
