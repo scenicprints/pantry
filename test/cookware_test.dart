@@ -25,17 +25,37 @@ void main() {
       }
     });
 
-    test('he owns exactly one cast iron piece; the rest is stainless', () {
-      final List<CookPan> iron = kCookware
-          .where((CookPan p) => p.material == 'cast iron')
-          .toList();
+    test('exactly one BARE cast iron piece, and it is the skillet', () {
+      final List<CookPan> iron =
+          kCookware.where((CookPan p) => p.material == 'cast iron').toList();
       expect(iron.length, 1);
       expect(iron.single.name, contains('cast iron skillet'));
-      expect(
-        kCookware.every(
-            (CookPan p) => p.material == 'cast iron' || p.material == 'stainless'),
-        true,
-      );
+      expect(iron.single.lid, false);
+    });
+
+    test('the two enamelled pieces are lidded and sizeless', () {
+      final List<CookPan> enamel = kCookware
+          .where((CookPan p) => p.material == 'enamelled cast iron')
+          .toList();
+      expect(enamel.length, 2);
+      for (final CookPan p in enamel) {
+        expect(p.lid, true, reason: '${p.name} has a lid');
+        // He has no stamp on the Lodge and doesn't know the roaster, so a
+        // quart figure here would be invented.
+        expect(p.name, isNot(contains('qt')));
+        expect(p.note, contains('Capacity unknown'));
+      }
+    });
+
+    test('every piece is one of the three materials he actually owns', () {
+      const Set<String> ok = <String>{
+        'cast iron',
+        'stainless',
+        'enamelled cast iron',
+      };
+      for (final CookPan p in kCookware) {
+        expect(ok.contains(p.material), true, reason: p.material);
+      }
     });
 
     test('nothing is nonstick', () {
@@ -66,10 +86,30 @@ void main() {
       expect(s, contains('NOTHING IN THIS KITCHEN IS NONSTICK'));
     });
 
-    test('marks the lidless pans NO LID and forbids covering them', () {
+    test('marks the lidless pans NO LID and sends covered work elsewhere', () {
       expect(s, contains('NO LID'));
       expect(s, contains('NO LID ON ANY FRYING PAN'));
-      expect(s, contains('sauce pan or the stock pot'));
+      expect(s, contains('Dutch oven, a sauce pan, the stock pot or the'));
+    });
+
+    test('protects the enamel from his all-steel utensils', () {
+      // Before the Dutch oven arrived this block said metal was safe on
+      // everything. With enamel in the kitchen that is wrong.
+      expect(s, isNot(contains('metal utensils are safe on everything')));
+      expect(s, contains('enamel chips'));
+      expect(s, contains('not scrape or knock'));
+    });
+
+    test('keeps the enamelled pieces off a sear and out of an empty preheat',
+        () {
+      expect(s, contains('NOT SEARING PANS'));
+      expect(s, contains('Never preheat either one'));
+      expect(s, contains('never send either above 6'));
+    });
+
+    test('sends acid to the enamel and away from the bare cast iron', () {
+      expect(s, contains('non-reactive'));
+      expect(s, contains('never into the bare cast iron'));
     });
 
     test('carries the strainer insert, the bakeware and the utensils', () {

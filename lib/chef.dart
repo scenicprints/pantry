@@ -131,6 +131,22 @@ const List<CookPan> kCookware = <CookPan>[
       lid: true,
       note: 'has a pasta strainer insert made to fit it, so pasta and blanched '
           'vegetables lift straight out — no colander needed'),
+  // No size on either enamelled piece on purpose. The Lodge is not stamped
+  // and he does not know the roaster's capacity, so naming quarts would be
+  // inventing a number a recipe would then size itself to.
+  CookPan('Lodge enamelled cast iron Dutch oven', 'enamelled cast iron',
+      lid: true,
+      note: 'round, lidded, and the only piece that browns on the stovetop '
+          'and then goes straight into the oven. The home for braises, stews, '
+          'pot roasts, soups, chilli and bread. Its enamel is non-reactive, '
+          'so tomato, wine and vinegar belong here rather than in the bare '
+          'skillet. Capacity unknown — never size a dish to it'),
+  CookPan('oval enamelled covered roaster', 'enamelled cast iron',
+      lid: true,
+      note: 'the second lidded oven piece, and the right shape for a whole '
+          'chicken or a covered roast: lid on to cook it through, lid off at '
+          'the end to brown. An oven dish that can brown gently on the stove, '
+          'never a searing pan. Capacity unknown — never size a dish to it'),
 ];
 
 /// All stainless. Listed so the chef never calls for a tool he hasn't got.
@@ -175,18 +191,30 @@ ${pans.toString().trimRight()}
 - Utensils, all stainless: ${kUtensils.join(', ')}.
 
 WHAT THAT MEANS FOR THE METHOD:
-- NO LID ON ANY FRYING PAN, or on the cast iron. A step that has to be
-  covered — steaming, a covered simmer, cheese melted under a lid — goes in
-  a sauce pan or the stock pot, or it does not go in the recipe at all.
-- Nothing is nonstick. Eggs and fish go in the cast iron, or into a stainless
-  pan that has passed the water test with the fat already in it. Never write a
-  step that assumes a slippery pan.
-- Every tool he owns is steel, so metal utensils are safe on everything. There
-  is no silicone and no wood in this kitchen.
+- NO LID ON ANY FRYING PAN, or on the bare cast iron skillet. A step that has
+  to be covered — steaming, a covered simmer, cheese melted under a lid —
+  goes in the Dutch oven, a sauce pan, the stock pot or the roaster, or it
+  does not go in the recipe at all. A covered braise belongs in the Dutch
+  oven first: it is the only pan that browns on the hob and then carries the
+  whole dish into the oven under its own lid.
+- Nothing is nonstick. Eggs and fish go in the bare cast iron skillet, or into
+  a stainless pan that has passed the water test with the fat already in it.
+  Never write a step that assumes a slippery pan.
+- THE TWO ENAMELLED PIECES ARE NOT SEARING PANS. Never preheat either one
+  empty, and never send either above 6 — the fat goes in first and the heat
+  stays moderate, or the enamel crazes. Their enamel is also non-reactive,
+  which the bare skillet is not: acid (tomato, wine, vinegar, citrus) goes in
+  the enamel or the stainless, never into the bare cast iron.
+- Every tool he owns is steel. On the stainless and the bare cast iron that is
+  fine and nothing is off limits. On the two ENAMELLED pieces the steel must
+  not scrape or knock, because enamel chips: stir and lift with it, and lift
+  fond with liquid rather than scraping it loose. There is no silicone and no
+  wood in this kitchen to reach for instead.
 - Don't crowd the pan: packed food steams instead of browning. Two mains want
   the 10", not the 8".
-- NAME THE PAN in the step ("the 10" stainless", "the cast iron") and give the
-  dial number with it. "A hot pan" is not an instruction he can follow.
+- NAME THE PAN in the step ("the 10" stainless", "the bare cast iron", "the
+  Dutch oven") and give the dial number with it. "A hot pan" is not an
+  instruction he can follow.
 ''';
 }
 
